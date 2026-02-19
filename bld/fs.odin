@@ -2,9 +2,6 @@ package bld
 
 // File system operations: mkdir, copy, read, write, delete, rename.
 
-import "base:runtime"
-import "core:io"
-import "core:mem"
 import os2 "core:os/os2"
 import "core:strings"
 
@@ -46,22 +43,42 @@ mkdir_all :: proc(path: string) -> bool {
     return true
 }
 
-// Copy a single file from src to dst.
+// Copy a single file from src to dst using streaming (constant memory).
 copy_file :: proc(src_path, dst_path: string) -> bool {
     if echo_actions do log_info("copying %s -> %s", src_path, dst_path)
 
-    // Read source.
-    data, read_err := os2.read_entire_file_from_path(src_path, context.temp_allocator)
-    if read_err != nil {
-        log_error("Could not read '%s': %v", src_path, read_err)
+    src, src_err := os2.open(src_path, {.Read})
+    if src_err != nil {
+        log_error("Could not open '%s' for reading: %v", src_path, src_err)
         return false
     }
+    defer os2.close(src)
 
-    // Write destination.
-    write_err := os2.write_entire_file(dst_path, data)
-    if write_err != nil {
-        log_error("Could not write '%s': %v", dst_path, write_err)
+    dst, dst_err := os2.open(dst_path, {.Write, .Create, .Trunc})
+    if dst_err != nil {
+        log_error("Could not open '%s' for writing: %v", dst_path, dst_err)
         return false
+    }
+    defer os2.close(dst)
+
+    COPY_BUF_SIZE :: 64 * 1024 // 64 KB
+    buf: [COPY_BUF_SIZE]u8
+
+    for {
+        n, read_err := os2.read(src, buf[:])
+        if n > 0 {
+            _, write_err := os2.write(dst, buf[:n])
+            if write_err != nil {
+                log_error("Could not write to '%s': %v", dst_path, write_err)
+                return false
+            }
+        }
+        if read_err != nil {
+            if read_err == .EOF do break
+            log_error("Could not read from '%s': %v", src_path, read_err)
+            return false
+        }
+        if n == 0 do break
     }
 
     return true

@@ -3,11 +3,8 @@ package bld
 // Command builder and execution.
 // The main workhorse of bld — build commands and run them.
 
-import "base:runtime"
 import "core:fmt"
-import "core:io"
 import "core:mem"
-import "core:os"
 import os2 "core:os/os2"
 import "core:strings"
 
@@ -60,9 +57,17 @@ cmd_render :: proc(cmd: Cmd, allocator := context.temp_allocator) -> string {
     sb := strings.builder_make(allocator)
     for arg, i in cmd.items {
         if i > 0 do strings.write_byte(&sb, ' ')
-        if strings.contains(arg, " ") {
+        needs_quote := strings.contains(arg, " ") || strings.contains(arg, "'")
+        if needs_quote {
             strings.write_byte(&sb, '\'')
-            strings.write_string(&sb, arg)
+            // Escape any single quotes inside: replace ' with '\''
+            for ch in transmute([]u8)arg {
+                if ch == '\'' {
+                    strings.write_string(&sb, "'\\''")
+                } else {
+                    strings.write_byte(&sb, ch)
+                }
+            }
             strings.write_byte(&sb, '\'')
         } else {
             strings.write_string(&sb, arg)

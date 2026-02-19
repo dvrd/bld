@@ -8,13 +8,15 @@ import os2 "core:os/os2"
 // A command chain representing a pipeline of commands.
 Chain :: struct {
     // Previous read-end of the pipe (feeds into the next command's stdin).
-    pipe_read: ^os2.File,
+    pipe_read:   ^os2.File,
     // The last command added (not yet started).
-    pending:   Cmd,
+    pending:     Cmd,
     // Whether the pending command should merge stderr into stdout.
-    err2out:   bool,
+    err2out:     bool,
     // Whether we have a pending command.
     has_pending: bool,
+    // Intermediate processes that need to be waited on at chain_end.
+    processes:   [dynamic]os2.Process,
 }
 
 Chain_Begin_Opt :: struct {
@@ -38,6 +40,7 @@ chain_begin :: proc(chain: ^Chain, opt: Chain_Begin_Opt = {}) -> bool {
     chain.pipe_read = nil
     chain.has_pending = false
     chain.err2out = false
+    chain.processes = make([dynamic]os2.Process, context.temp_allocator)
 
     if len(opt.stdin_path) > 0 {
         f, err := os2.open(opt.stdin_path, {.Read})
@@ -86,6 +89,9 @@ chain_cmd :: proc(chain: ^Chain, cmd: ^Cmd, opt: Chain_Cmd_Opt = {}) -> bool {
             os2.close(r)
             return false
         }
+
+        // Track intermediate process so we can wait on it in chain_end.
+        append(&chain.processes, process)
 
         // The new read end becomes the input for the next command.
         chain.pipe_read = r
@@ -161,11 +167,32 @@ chain_end :: proc(chain: ^Chain, opt: Chain_End_Opt = {}) -> bool {
 
     if opt.async != nil {
         append(&opt.async.items, process)
+        // Still need to wait on intermediate processes.
+        for p in chain.processes {
+            _, _ = os2.process_wait(p)
+            _ = os2.process_close(p)
+        }
+        clear(&chain.processes)
         return true
     }
 
     state, wait_err := os2.process_wait(process)
     _ = os2.process_close(process)
+
+    // Wait on all intermediate pipeline processes.
+    all_ok := true
+    for p in chain.processes {
+        p_state, p_err := os2.process_wait(p)
+        _ = os2.process_close(p)
+        if p_err != nil {
+            log_error("Could not wait for pipeline process: %v", p_err)
+            all_ok = false
+        } else if !p_state.success {
+            log_error("Pipeline process exited with code %d", p_state.exit_code)
+            all_ok = false
+        }
+    }
+    clear(&chain.processes)
 
     if wait_err != nil {
         log_error("Could not wait for process: %v", wait_err)
@@ -177,5 +204,5 @@ chain_end :: proc(chain: ^Chain, opt: Chain_End_Opt = {}) -> bool {
         return false
     }
 
-    return true
+    return all_ok
 }

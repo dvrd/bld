@@ -43,7 +43,7 @@ file_stem :: proc(path: string) -> string {
     return name
 }
 
-// Join path components with the OS separator.
+// Join path components with a forward slash separator.
 path_join :: proc(parts: ..string) -> string {
     return strings.join(parts, "/", context.temp_allocator)
 }

@@ -2,6 +2,7 @@ package bld
 
 // Directory walking utilities.
 
+import "base:runtime"
 import os2 "core:os/os2"
 import "core:strings"
 
@@ -41,6 +42,10 @@ walk_dir_impl :: proc(
     opt:      Walk_Opt,
     level:    int,
 ) -> bool {
+    // Temp guard: saves temp allocator position on entry, restores on any
+    // return path. Prevents unbounded accumulation in deep recursive trees.
+    runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
+
     f, open_err := os2.open(dir_path)
     if open_err != nil {
         log_error("Could not open directory '%s': %v", dir_path, open_err)
