@@ -5,7 +5,7 @@ package bld
 
 import "core:fmt"
 import "core:mem"
-import os2 "core:os/os2"
+import "core:os"
 import "core:strings"
 
 // A command to be executed. Dynamic array of string arguments.
@@ -103,48 +103,45 @@ cmd_run :: proc(cmd: ^Cmd, opt: Cmd_Run_Opt = {}) -> bool {
         log_info("CMD: %s", cmd_render(cmd^))
     }
 
-    // Build the os2 command slice.
+    // Build the os command slice.
     command := make([]string, len(cmd.items), context.temp_allocator)
     for arg, i in cmd.items {
         command[i] = arg
     }
 
     // Set up file descriptors for redirection.
-    stdin_file:  ^os2.File = nil
-    stdout_file: ^os2.File = nil
-    stderr_file: ^os2.File = nil
+    stdin_file:  ^os.File = nil
+    stdout_file: ^os.File = nil
+    stderr_file: ^os.File = nil
 
     if len(opt.stdin_path) > 0 {
-        f, err := os2.open(opt.stdin_path, {.Read})
+        f, err := os.open(opt.stdin_path, {.Read})
         if err != nil {
             log_error("Could not open stdin file '%s': %v", opt.stdin_path, err)
             return false
         }
         stdin_file = f
     }
-    defer if stdin_file != nil do os2.close(stdin_file)
 
     if len(opt.stdout_path) > 0 {
-        f, err := os2.open(opt.stdout_path, {.Write, .Create, .Trunc})
+        f, err := os.open(opt.stdout_path, {.Write, .Create, .Trunc})
         if err != nil {
             log_error("Could not open stdout file '%s': %v", opt.stdout_path, err)
             return false
         }
         stdout_file = f
     }
-    defer if stdout_file != nil do os2.close(stdout_file)
 
     if len(opt.stderr_path) > 0 {
-        f, err := os2.open(opt.stderr_path, {.Write, .Create, .Trunc})
+        f, err := os.open(opt.stderr_path, {.Write, .Create, .Trunc})
         if err != nil {
             log_error("Could not open stderr file '%s': %v", opt.stderr_path, err)
             return false
         }
         stderr_file = f
     }
-    defer if stderr_file != nil do os2.close(stderr_file)
 
-    desc := os2.Process_Desc{
+    desc := os.Process_Desc{
         command = command,
         stdin   = stdin_file,
         stdout  = stdout_file,
@@ -153,6 +150,8 @@ cmd_run :: proc(cmd: ^Cmd, opt: Cmd_Run_Opt = {}) -> bool {
 
     if opt.async != nil {
         // Async mode: start and append to procs list.
+        // NOTE: redirect files are tracked alongside the process so they
+        // can be closed after the process finishes (in procs_wait).
         max_p := opt.max_procs > 0 ? opt.max_procs : nprocs() + 1
 
         // Flush if we're at capacity.
@@ -163,27 +162,34 @@ cmd_run :: proc(cmd: ^Cmd, opt: Cmd_Run_Opt = {}) -> bool {
             }
         }
 
-        process, err := os2.process_start(desc)
+        process, err := os.process_start(desc)
         if err != nil {
             log_error("Could not start process '%s': %v", cmd.items[0], err)
+            _close_redirect_files(stdin_file, stdout_file, stderr_file)
             if !opt.dont_reset do cmd_reset(cmd)
             return false
         }
-        append(&opt.async.items, process)
+        append(&opt.async.items, Tracked_Process{
+            process     = process,
+            stdin_file  = stdin_file,
+            stdout_file = stdout_file,
+            stderr_file = stderr_file,
+        })
         if !opt.dont_reset do cmd_reset(cmd)
         return true
     }
 
     // Synchronous mode: start and wait.
-    process, start_err := os2.process_start(desc)
+    process, start_err := os.process_start(desc)
     if start_err != nil {
         log_error("Could not start process '%s': %v", cmd.items[0], start_err)
+        _close_redirect_files(stdin_file, stdout_file, stderr_file)
         if !opt.dont_reset do cmd_reset(cmd)
         return false
     }
 
-    state, wait_err := os2.process_wait(process)
-    _ = os2.process_close(process)
+    state, wait_err := os.process_wait(process)
+    _close_redirect_files(stdin_file, stdout_file, stderr_file)
 
     if wait_err != nil {
         log_error("Could not wait for process '%s': %v", cmd.items[0], wait_err)
@@ -224,11 +230,11 @@ cmd_run_capture :: proc(
         command[i] = arg
     }
 
-    desc := os2.Process_Desc{
+    desc := os.Process_Desc{
         command = command,
     }
 
-    state, stdout, stderr, err := os2.process_exec(desc, allocator)
+    state, stdout, stderr, err := os.process_exec(desc, allocator)
     defer delete(stderr, allocator)
 
     if err != nil {
@@ -247,4 +253,12 @@ cmd_run_capture :: proc(
 
     cmd_reset(cmd)
     return stdout, true
+}
+
+// Close redirect files after a process finishes.
+@(private = "file")
+_close_redirect_files :: proc(stdin_file, stdout_file, stderr_file: ^os.File) {
+    if stdin_file  != nil do os.close(stdin_file)
+    if stdout_file != nil do os.close(stdout_file)
+    if stderr_file != nil do os.close(stderr_file)
 }

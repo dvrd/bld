@@ -108,6 +108,10 @@ Build_Config :: struct {
     // Defines (-define:name=value).
     defines: []Define,
 
+    // Ignore unused defineables (-ignore-unused-defineables).
+    // Useful when passing defines that only some packages consume.
+    ignore_unused_defineables: bool,
+
     // Vet flags.
     vet: Vet_Flags,
 
@@ -271,6 +275,11 @@ _run_odin :: proc(
     // -define:name=value
     for d in config.defines {
         cmd_append(&cmd, fmt.tprintf("-define:%s=%s", d.name, d.value))
+    }
+
+    // -ignore-unused-defineables
+    if config.ignore_unused_defineables {
+        cmd_append(&cmd, "-ignore-unused-defineables")
     }
 
     // Vet flags.

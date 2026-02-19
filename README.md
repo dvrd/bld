@@ -94,6 +94,7 @@ bld.build({
 | `strict_style` | `bool` | `-strict-style` |
 | `custom_attributes` | `[]string` | `-custom-attribute:` |
 | `vet_packages` | `[]string` | `-vet-packages:` |
+| `ignore_unused_defineables` | `bool` | `-ignore-unused-defineables` |
 | `extra_flags` | `[]string` | Raw flags passed verbatim |
 
 ### Compiler Verbs

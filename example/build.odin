@@ -127,7 +127,7 @@ main :: proc() {
             defines      = {
                 {name = "ODIN_TEST_THREADS", value = "1"},
             },
-            extra_flags  = {"-ignore-unused-defineables"},
+            ignore_unused_defineables = true,
         })
         check_result(&pc, "build(defines)", ok)
     }

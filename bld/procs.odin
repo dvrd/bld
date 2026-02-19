@@ -3,19 +3,27 @@ package bld
 // Process management for async command execution.
 
 import "core:mem"
-import os2 "core:os/os2"
+import "core:os"
 import "core:sys/posix"
+
+// A tracked process with optional redirect files that need closing.
+Tracked_Process :: struct {
+    process:     os.Process,
+    stdin_file:  ^os.File,
+    stdout_file: ^os.File,
+    stderr_file: ^os.File,
+}
 
 // A list of running processes for async execution.
 Procs :: struct {
-    items:     [dynamic]os2.Process,
+    items:     [dynamic]Tracked_Process,
     allocator: mem.Allocator,
 }
 
 // Create a new process list.
 procs_create :: proc(allocator := context.allocator) -> Procs {
     return Procs{
-        items     = make([dynamic]os2.Process, allocator),
+        items     = make([dynamic]Tracked_Process, allocator),
         allocator = allocator,
     }
 }
@@ -26,16 +34,20 @@ procs_destroy :: proc(procs: ^Procs) {
 }
 
 // Wait for all processes to finish. Returns false if any process failed.
+// Closes redirect files after each process completes.
 procs_wait :: proc(procs: Procs) -> bool {
     all_ok := true
-    for process in procs.items {
-        state, err := os2.process_wait(process)
-        _ = os2.process_close(process)
+    for tp in procs.items {
+        state, err := os.process_wait(tp.process)
+        // Close redirect files now that the process is done.
+        if tp.stdin_file  != nil do os.close(tp.stdin_file)
+        if tp.stdout_file != nil do os.close(tp.stdout_file)
+        if tp.stderr_file != nil do os.close(tp.stderr_file)
         if err != nil {
-            log_error("Could not wait for process (pid %d): %v", process.pid, err)
+            log_error("Could not wait for process (pid %d): %v", tp.process.pid, err)
             all_ok = false
         } else if !state.success {
-            log_error("Process (pid %d) exited with code %d", process.pid, state.exit_code)
+            log_error("Process (pid %d) exited with code %d", tp.process.pid, state.exit_code)
             all_ok = false
         }
     }

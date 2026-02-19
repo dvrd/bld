@@ -2,20 +2,20 @@ package bld
 
 // Path utilities.
 
-import os2 "core:os/os2"
+import "core:os"
 import "core:strings"
 
 // Get the last component of a path (filename or directory name).
 // "/path/to/file.c" -> "file.c"
 path_name :: proc(path: string) -> string {
-    _, name := os2.split_path(path)
+    _, name := os.split_path(path)
     return name
 }
 
 // Get the directory part of a path.
 // "/path/to/file.c" -> "/path/to"
 dir_name :: proc(path: string, allocator := context.temp_allocator) -> string {
-    dir, _ := os2.split_path(path)
+    dir, _ := os.split_path(path)
     return strings.clone(dir, allocator)
 }
 
@@ -50,7 +50,7 @@ path_join :: proc(parts: ..string) -> string {
 
 // Get the current working directory (temp allocated).
 get_cwd :: proc() -> (string, bool) {
-    cwd, err := os2.get_working_directory(context.temp_allocator)
+    cwd, err := os.get_working_directory(context.temp_allocator)
     if err != nil {
         log_error("Could not get current directory: %v", err)
         return "", false
@@ -60,7 +60,7 @@ get_cwd :: proc() -> (string, bool) {
 
 // Set the current working directory.
 set_cwd :: proc(path: string) -> bool {
-    err := os2.set_working_directory(path)
+    err := os.set_working_directory(path)
     if err != nil {
         log_error("Could not set current directory to '%s': %v", path, err)
         return false

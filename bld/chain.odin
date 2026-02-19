@@ -3,12 +3,12 @@ package bld
 // Command chains (pipes).
 // Equivalent to shell: cmd1 | cmd2 | cmd3
 
-import os2 "core:os/os2"
+import "core:os"
 
 // A command chain representing a pipeline of commands.
 Chain :: struct {
     // Previous read-end of the pipe (feeds into the next command's stdin).
-    pipe_read:   ^os2.File,
+    pipe_read:   ^os.File,
     // The last command added (not yet started).
     pending:     Cmd,
     // Whether the pending command should merge stderr into stdout.
@@ -16,7 +16,7 @@ Chain :: struct {
     // Whether we have a pending command.
     has_pending: bool,
     // Intermediate processes that need to be waited on at chain_end.
-    processes:   [dynamic]os2.Process,
+    processes:   [dynamic]os.Process,
 }
 
 Chain_Begin_Opt :: struct {
@@ -40,10 +40,10 @@ chain_begin :: proc(chain: ^Chain, opt: Chain_Begin_Opt = {}) -> bool {
     chain.pipe_read = nil
     chain.has_pending = false
     chain.err2out = false
-    chain.processes = make([dynamic]os2.Process, context.temp_allocator)
+    chain.processes = make([dynamic]os.Process, context.temp_allocator)
 
     if len(opt.stdin_path) > 0 {
-        f, err := os2.open(opt.stdin_path, {.Read})
+        f, err := os.open(opt.stdin_path, {.Read})
         if err != nil {
             log_error("Could not open stdin file '%s': %v", opt.stdin_path, err)
             return false
@@ -58,7 +58,7 @@ chain_begin :: proc(chain: ^Chain, opt: Chain_Begin_Opt = {}) -> bool {
 chain_cmd :: proc(chain: ^Chain, cmd: ^Cmd, opt: Chain_Cmd_Opt = {}) -> bool {
     if chain.has_pending {
         // Start the previous command with pipe output.
-        r, w, pipe_err := os2.pipe()
+        r, w, pipe_err := os.pipe()
         if pipe_err != nil {
             log_error("Could not create pipe: %v", pipe_err)
             return false
@@ -69,7 +69,7 @@ chain_cmd :: proc(chain: ^Chain, cmd: ^Cmd, opt: Chain_Cmd_Opt = {}) -> bool {
             command[i] = arg
         }
 
-        desc := os2.Process_Desc{
+        desc := os.Process_Desc{
             command = command,
             stdin   = chain.pipe_read,
             stdout  = w,
@@ -78,15 +78,15 @@ chain_cmd :: proc(chain: ^Chain, cmd: ^Cmd, opt: Chain_Cmd_Opt = {}) -> bool {
 
         if echo_actions do log_info("PIPE: %s", cmd_render(chain.pending))
 
-        process, err := os2.process_start(desc)
+        process, err := os.process_start(desc)
 
         // Close write end and old read end.
-        os2.close(w)
-        if chain.pipe_read != nil do os2.close(chain.pipe_read)
+        os.close(w)
+        if chain.pipe_read != nil do os.close(chain.pipe_read)
 
         if err != nil {
             log_error("Could not start process: %v", err)
-            os2.close(r)
+            os.close(r)
             return false
         }
 
@@ -114,7 +114,7 @@ chain_cmd :: proc(chain: ^Chain, cmd: ^Cmd, opt: Chain_Cmd_Opt = {}) -> bool {
 chain_end :: proc(chain: ^Chain, opt: Chain_End_Opt = {}) -> bool {
     if !chain.has_pending {
         // Empty chain — nothing to do.
-        if chain.pipe_read != nil do os2.close(chain.pipe_read)
+        if chain.pipe_read != nil do os.close(chain.pipe_read)
         return true
     }
 
@@ -123,30 +123,30 @@ chain_end :: proc(chain: ^Chain, opt: Chain_End_Opt = {}) -> bool {
         command[i] = arg
     }
 
-    stdout_file: ^os2.File = nil
-    stderr_file: ^os2.File = nil
+    stdout_file: ^os.File = nil
+    stderr_file: ^os.File = nil
 
     if len(opt.stdout_path) > 0 {
-        f, err := os2.open(opt.stdout_path, {.Write, .Create, .Trunc})
+        f, err := os.open(opt.stdout_path, {.Write, .Create, .Trunc})
         if err != nil {
             log_error("Could not open stdout file '%s': %v", opt.stdout_path, err)
             return false
         }
         stdout_file = f
     }
-    defer if stdout_file != nil do os2.close(stdout_file)
+    defer if stdout_file != nil do os.close(stdout_file)
 
     if len(opt.stderr_path) > 0 {
-        f, err := os2.open(opt.stderr_path, {.Write, .Create, .Trunc})
+        f, err := os.open(opt.stderr_path, {.Write, .Create, .Trunc})
         if err != nil {
             log_error("Could not open stderr file '%s': %v", opt.stderr_path, err)
             return false
         }
         stderr_file = f
     }
-    defer if stderr_file != nil do os2.close(stderr_file)
+    defer if stderr_file != nil do os.close(stderr_file)
 
-    desc := os2.Process_Desc{
+    desc := os.Process_Desc{
         command = command,
         stdin   = chain.pipe_read,
         stdout  = stdout_file,
@@ -155,8 +155,8 @@ chain_end :: proc(chain: ^Chain, opt: Chain_End_Opt = {}) -> bool {
 
     if echo_actions do log_info("PIPE: %s", cmd_render(chain.pending))
 
-    process, start_err := os2.process_start(desc)
-    if chain.pipe_read != nil do os2.close(chain.pipe_read)
+    process, start_err := os.process_start(desc)
+    if chain.pipe_read != nil do os.close(chain.pipe_read)
     chain.pipe_read = nil
     chain.has_pending = false
 
@@ -166,24 +166,21 @@ chain_end :: proc(chain: ^Chain, opt: Chain_End_Opt = {}) -> bool {
     }
 
     if opt.async != nil {
-        append(&opt.async.items, process)
+        append(&opt.async.items, Tracked_Process{process = process})
         // Still need to wait on intermediate processes.
         for p in chain.processes {
-            _, _ = os2.process_wait(p)
-            _ = os2.process_close(p)
+            _, _ = os.process_wait(p)
         }
         clear(&chain.processes)
         return true
     }
 
-    state, wait_err := os2.process_wait(process)
-    _ = os2.process_close(process)
+    state, wait_err := os.process_wait(process)
 
     // Wait on all intermediate pipeline processes.
     all_ok := true
     for p in chain.processes {
-        p_state, p_err := os2.process_wait(p)
-        _ = os2.process_close(p)
+        p_state, p_err := os.process_wait(p)
         if p_err != nil {
             log_error("Could not wait for pipeline process: %v", p_err)
             all_ok = false

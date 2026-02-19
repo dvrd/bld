@@ -3,7 +3,7 @@ package bld
 // Directory walking utilities.
 
 import "base:runtime"
-import os2 "core:os/os2"
+import "core:os"
 import "core:strings"
 
 // Action to take during directory walking.
@@ -32,11 +32,11 @@ Walk_Opt :: struct {
 
 // Recursively walk a directory tree.
 walk_dir :: proc(root: string, callback: Walk_Proc, opt: Walk_Opt = {}) -> bool {
-    return walk_dir_impl(root, callback, opt, 0)
+    return _walk_dir_impl(root, callback, opt, 0)
 }
 
 @(private = "file")
-walk_dir_impl :: proc(
+_walk_dir_impl :: proc(
     dir_path: string,
     callback: Walk_Proc,
     opt:      Walk_Opt,
@@ -46,19 +46,19 @@ walk_dir_impl :: proc(
     // return path. Prevents unbounded accumulation in deep recursive trees.
     runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
 
-    f, open_err := os2.open(dir_path)
+    f, open_err := os.open(dir_path)
     if open_err != nil {
         log_error("Could not open directory '%s': %v", dir_path, open_err)
         return false
     }
-    defer os2.close(f)
+    defer os.close(f)
 
-    infos, read_err := os2.read_all_directory(f, context.temp_allocator)
+    infos, read_err := os.read_all_directory(f, context.temp_allocator)
     if read_err != nil {
         log_error("Could not read directory '%s': %v", dir_path, read_err)
         return false
     }
-    defer os2.file_info_slice_delete(infos, context.temp_allocator)
+    defer os.file_info_slice_delete(infos, context.temp_allocator)
 
     for info in infos {
         name := info.name
@@ -90,7 +90,7 @@ walk_dir_impl :: proc(
         }
 
         if ft == .Directory {
-            if !walk_dir_impl(child_path, callback, opt, level + 1) {
+            if !_walk_dir_impl(child_path, callback, opt, level + 1) {
                 return false
             }
         }

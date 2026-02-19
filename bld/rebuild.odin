@@ -6,29 +6,29 @@ package bld
 
 import "base:runtime"
 import "core:fmt"
-import os2 "core:os/os2"
+import "core:os"
 import "core:strings"
 import "core:time"
 
 // Check if an output file needs rebuilding based on input file modification times.
 // Returns:  1 = needs rebuild, 0 = up to date, -1 = error.
 needs_rebuild :: proc(output_path: string, input_paths: []string) -> int {
-    output_info, out_err := os2.stat(output_path, context.temp_allocator)
+    output_info, out_err := os.stat(output_path, context.temp_allocator)
     if out_err != nil {
         // Output doesn't exist, needs rebuild.
         return 1
     }
-    defer os2.file_info_delete(output_info, context.temp_allocator)
+    defer os.file_info_delete(output_info, context.temp_allocator)
 
     output_mtime := output_info.modification_time
 
     for input_path in input_paths {
-        input_info, in_err := os2.stat(input_path, context.temp_allocator)
+        input_info, in_err := os.stat(input_path, context.temp_allocator)
         if in_err != nil {
             log_error("Could not stat input file '%s': %v", input_path, in_err)
             return -1
         }
-        defer os2.file_info_delete(input_info, context.temp_allocator)
+        defer os.file_info_delete(input_info, context.temp_allocator)
 
         if time.diff(output_mtime, input_info.modification_time) > 0 {
             return 1
@@ -105,25 +105,41 @@ go_rebuild_urself :: proc(source_path: string, extra_sources: ..string) {
     // Try to delete the old binary (best effort).
     delete_file(old_path)
 
-    // Re-execute with original arguments.
+    // Re-execute with original arguments and propagate exit code.
     exec_cmd := cmd_create(context.temp_allocator)
     cmd_append(&exec_cmd, binary_path)
-    for arg in os2.args[1:] {
+    for arg in os.args[1:] {
         cmd_append(&exec_cmd, arg)
     }
 
-    if !cmd_run(&exec_cmd, {dont_reset = true}) {
+    // Run the new binary. We need to capture success/failure and propagate
+    // the exit code. cmd_run returns false on non-zero exit, but we need
+    // the actual exit code. Use process_start/wait directly.
+    exec_command := make([]string, len(exec_cmd.items), context.temp_allocator)
+    for arg, i in exec_cmd.items {
+        exec_command[i] = arg
+    }
+
+    process, start_err := os.process_start(os.Process_Desc{command = exec_command})
+    if start_err != nil {
+        log_error("Could not re-execute '%s': %v", binary_path, start_err)
         runtime.exit(1)
     }
 
-    runtime.exit(0)
+    state, wait_err := os.process_wait(process)
+    if wait_err != nil {
+        log_error("Could not wait for re-executed process: %v", wait_err)
+        runtime.exit(1)
+    }
+
+    runtime.exit(int(state.exit_code))
 }
 
 // Helper: get the path to the currently running executable.
 @(private = "file")
 _get_self_exe_path :: proc() -> (string, bool) {
-    self_info, self_err := os2.current_process_info({.Executable_Path}, context.temp_allocator)
-    defer os2.free_process_info(self_info, context.temp_allocator)
+    self_info, self_err := os.current_process_info({.Executable_Path}, context.temp_allocator)
+    defer os.free_process_info(self_info, context.temp_allocator)
     if self_err != nil {
         return "", false
     }
