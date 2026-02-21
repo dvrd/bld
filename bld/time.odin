@@ -7,6 +7,7 @@ import "core:time"
 NANOS_PER_SEC :: 1_000_000_000
 
 // Get a monotonic timestamp in nanoseconds. Useful for benchmarking build steps.
+@(export, link_name="bld_nanos_now")
 nanos_now :: proc() -> i64 {
     tick := time.tick_now()
     return tick._nsec
@@ -18,10 +19,12 @@ nanos_now :: proc() -> i64 {
 //   // ... do work ...
 //   elapsed := bld.timer_elapsed(start)
 //   bld.log_info("Build took %.2f seconds", elapsed)
+@(export, link_name="bld_timer_start")
 timer_start :: proc() -> time.Tick {
     return time.tick_now()
 }
 
+@(export, link_name="bld_timer_elapsed")
 timer_elapsed :: proc(start: time.Tick) -> f64 {
     d := time.tick_since(start)
     return time.duration_seconds(d)

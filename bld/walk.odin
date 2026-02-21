@@ -31,6 +31,7 @@ Walk_Opt :: struct {
 }
 
 // Recursively walk a directory tree.
+@(export, link_name="bld_walk_dir")
 walk_dir :: proc(root: string, callback: Walk_Proc, opt: Walk_Opt = {}) -> bool {
     return _walk_dir_impl(root, callback, opt, 0)
 }

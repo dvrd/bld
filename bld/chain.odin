@@ -36,6 +36,7 @@ Chain_End_Opt :: struct {
 }
 
 // Begin a command chain.
+@(export, link_name="bld_chain_begin")
 chain_begin :: proc(chain: ^Chain, opt: Chain_Begin_Opt = {}) -> bool {
     chain.pipe_read = nil
     chain.has_pending = false
@@ -55,6 +56,7 @@ chain_begin :: proc(chain: ^Chain, opt: Chain_Begin_Opt = {}) -> bool {
 }
 
 // Add a command to the chain.
+@(export, link_name="bld_chain_cmd")
 chain_cmd :: proc(chain: ^Chain, cmd: ^Cmd, opt: Chain_Cmd_Opt = {}) -> bool {
     if chain.has_pending {
         // Start the previous command with pipe output.
@@ -111,6 +113,7 @@ chain_cmd :: proc(chain: ^Chain, cmd: ^Cmd, opt: Chain_Cmd_Opt = {}) -> bool {
 }
 
 // End the chain, executing the final command.
+@(export, link_name="bld_chain_end")
 chain_end :: proc(chain: ^Chain, opt: Chain_End_Opt = {}) -> bool {
     if !chain.has_pending {
         // Empty chain — nothing to do.

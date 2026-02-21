@@ -21,6 +21,7 @@ Procs :: struct {
 }
 
 // Create a new process list.
+@(export, link_name="bld_procs_create")
 procs_create :: proc(allocator := context.allocator) -> Procs {
     return Procs{
         items     = make([dynamic]Tracked_Process, allocator),
@@ -29,12 +30,14 @@ procs_create :: proc(allocator := context.allocator) -> Procs {
 }
 
 // Free all memory held by a process list.
+@(export, link_name="bld_procs_destroy")
 procs_destroy :: proc(procs: ^Procs) {
     delete(procs.items)
 }
 
 // Wait for all processes to finish. Returns false if any process failed.
 // Closes redirect files after each process completes.
+@(export, link_name="bld_procs_wait")
 procs_wait :: proc(procs: Procs) -> bool {
     all_ok := true
     for tp in procs.items {
@@ -55,6 +58,7 @@ procs_wait :: proc(procs: Procs) -> bool {
 }
 
 // Wait for all processes and reset the list. Returns false if any failed.
+@(export, link_name="bld_procs_flush")
 procs_flush :: proc(procs: ^Procs) -> bool {
     ok := procs_wait(procs^)
     clear(&procs.items)
@@ -75,6 +79,7 @@ when ODIN_OS == .Darwin {
 }
 
 // Get the number of logical processors on the machine.
+@(export, link_name="bld_nprocs")
 nprocs :: proc() -> int {
     when ODIN_OS == .Darwin || ODIN_OS == .Linux || ODIN_OS == .FreeBSD || ODIN_OS == .NetBSD || ODIN_OS == .OpenBSD {
         result := posix.sysconf(_SC_NPROCESSORS_ONLN)

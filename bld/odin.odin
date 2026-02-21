@@ -168,6 +168,7 @@ Build_Config :: struct {
 }
 
 // Build an Odin package. Returns true on success.
+@(export, link_name="bld_build")
 build :: proc(config: Build_Config) -> bool {
     return _run_odin("build", config)
 }
@@ -177,17 +178,26 @@ run :: proc(config: Build_Config, args: ..string) -> bool {
     return _run_odin("run", config, args)
 }
 
+// Exported companion for dynlib — takes slice instead of variadic.
+@(export, link_name="bld_run")
+_bld_run :: proc(config: Build_Config, args: []string) -> bool {
+    return _run_odin("run", config, args)
+}
+
 // Build and run tests in an Odin package.
+@(export, link_name="bld_test")
 test :: proc(config: Build_Config) -> bool {
     return _run_odin("test", config)
 }
 
 // Type-check an Odin package without building.
+@(export, link_name="bld_check")
 check :: proc(config: Build_Config) -> bool {
     return _run_odin("check", config)
 }
 
 // Build a config with common defaults for a release build.
+@(export, link_name="bld_release_config")
 release_config :: proc(package_path: string, out: string) -> Build_Config {
     return Build_Config{
         package_path = package_path,
@@ -197,6 +207,7 @@ release_config :: proc(package_path: string, out: string) -> Build_Config {
 }
 
 // Build a config with common defaults for a debug build.
+@(export, link_name="bld_debug_config")
 debug_config :: proc(package_path: string, out: string) -> Build_Config {
     return Build_Config{
         package_path = package_path,

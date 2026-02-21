@@ -12,6 +12,8 @@ import "core:time"
 
 // Check if an output file needs rebuilding based on input file modification times.
 // Returns:  1 = needs rebuild, 0 = up to date, -1 = error.
+// When an input path is a directory, walks it and checks individual .odin file mtimes.
+@(export, link_name="bld_needs_rebuild")
 needs_rebuild :: proc(output_path: string, input_paths: []string) -> int {
     output_info, out_err := os.stat(output_path, context.temp_allocator)
     if out_err != nil {
@@ -25,13 +27,58 @@ needs_rebuild :: proc(output_path: string, input_paths: []string) -> int {
     for input_path in input_paths {
         input_info, in_err := os.stat(input_path, context.temp_allocator)
         if in_err != nil {
-            log_error("Could not stat input file '%s': %v", input_path, in_err)
+            log_error("Could not stat input '%s': %v", input_path, in_err)
             return -1
         }
         defer os.file_info_delete(input_info, context.temp_allocator)
 
-        if time.diff(output_mtime, input_info.modification_time) > 0 {
-            return 1
+        if input_info.type == .Directory {
+            // Walk the directory and find the newest .odin file.
+            Newest_State :: struct {
+                newest: time.Time,
+                found:  bool,
+                err:    bool,
+            }
+            state := Newest_State{}
+            walk_dir(input_path, proc(entry: Walk_Entry, user_data: rawptr) -> Walk_Action {
+                s := cast(^Newest_State)user_data
+                if entry.type != .Regular do return .Continue
+                // Check for .odin extension.
+                name := path_name(entry.path)
+                dot_idx := -1
+                for i := len(name) - 1; i >= 0; i -= 1 {
+                    if name[i] == '.' {
+                        dot_idx = i
+                        break
+                    }
+                }
+                if dot_idx < 0 || name[dot_idx:] != ".odin" do return .Continue
+
+                info, err := os.stat(entry.path, context.temp_allocator)
+                if err != nil {
+                    s.err = true
+                    return .Stop
+                }
+                defer os.file_info_delete(info, context.temp_allocator)
+
+                if !s.found || time.diff(s.newest, info.modification_time) > 0 {
+                    s.newest = info.modification_time
+                    s.found = true
+                }
+                return .Continue
+            }, {user_data = &state})
+
+            if state.err {
+                log_error("Could not stat files in directory '%s'", input_path)
+                return -1
+            }
+            if state.found && time.diff(output_mtime, state.newest) > 0 {
+                return 1
+            }
+        } else {
+            if time.diff(output_mtime, input_info.modification_time) > 0 {
+                return 1
+            }
         }
     }
 
@@ -39,6 +86,7 @@ needs_rebuild :: proc(output_path: string, input_paths: []string) -> int {
 }
 
 // Convenience: check if output needs rebuild against a single input.
+@(export, link_name="bld_needs_rebuild1")
 needs_rebuild1 :: proc(output_path, input_path: string) -> int {
     return needs_rebuild(output_path, {input_path})
 }
@@ -115,6 +163,76 @@ go_rebuild_urself :: proc(source_path: string, extra_sources: ..string) {
     // Run the new binary. We need to capture success/failure and propagate
     // the exit code. cmd_run returns false on non-zero exit, but we need
     // the actual exit code. Use process_start/wait directly.
+    exec_command := make([]string, len(exec_cmd.items), context.temp_allocator)
+    for arg, i in exec_cmd.items {
+        exec_command[i] = arg
+    }
+
+    process, start_err := os.process_start(os.Process_Desc{command = exec_command})
+    if start_err != nil {
+        log_error("Could not re-execute '%s': %v", binary_path, start_err)
+        runtime.exit(1)
+    }
+
+    state, wait_err := os.process_wait(process)
+    if wait_err != nil {
+        log_error("Could not wait for re-executed process: %v", wait_err)
+        runtime.exit(1)
+    }
+
+    runtime.exit(int(state.exit_code))
+}
+
+// Exported companion for dynlib — takes slice instead of variadic.
+@(export, link_name="bld_go_rebuild_urself")
+_bld_go_rebuild_urself :: proc(source_path: string, extra_sources: []string) {
+    // Get the path to the currently running executable.
+    binary_path := _get_self_exe_path() or_else ""
+    if len(binary_path) == 0 {
+        log_error("Could not determine executable path, skipping rebuild check")
+        return
+    }
+
+    // Collect all source paths to check.
+    all_sources := make([dynamic]string, context.temp_allocator)
+    append(&all_sources, source_path)
+    for extra in extra_sources {
+        append(&all_sources, extra)
+    }
+
+    // Check if rebuild is needed.
+    rebuild := needs_rebuild(binary_path, all_sources[:])
+    if rebuild < 0 {
+        runtime.exit(1)
+    }
+    if rebuild == 0 {
+        return
+    }
+
+    log_info("Build script changed, rebuilding...")
+
+    old_path := strings.concatenate({binary_path, ".old"}, context.temp_allocator)
+    if !rename_file(binary_path, old_path) {
+        runtime.exit(1)
+    }
+
+    rebuild_cmd := cmd_create(context.temp_allocator)
+    cmd_append(&rebuild_cmd, "odin", "build", source_path, "-o:speed")
+    cmd_append(&rebuild_cmd, fmt.tprintf("-out:%s", binary_path))
+
+    if !cmd_run(&rebuild_cmd, {dont_reset = true}) {
+        rename_file(old_path, binary_path)
+        runtime.exit(1)
+    }
+
+    delete_file(old_path)
+
+    exec_cmd := cmd_create(context.temp_allocator)
+    cmd_append(&exec_cmd, binary_path)
+    for arg in os.args[1:] {
+        cmd_append(&exec_cmd, arg)
+    }
+
     exec_command := make([]string, len(exec_cmd.items), context.temp_allocator)
     for arg, i in exec_cmd.items {
         exec_command[i] = arg

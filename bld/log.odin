@@ -13,9 +13,11 @@ Log_Level :: enum {
 }
 
 // Any messages with a level below this are suppressed.
+@(export, link_name="bld_minimal_log_level")
 minimal_log_level: Log_Level = .Info
 
 // Whether to echo actions like command execution, mkdir, copy, etc.
+@(export, link_name="bld_echo_actions")
 echo_actions: bool = true
 
 log_info :: proc(format: string, args: ..any) {
@@ -27,6 +29,22 @@ log_warn :: proc(format: string, args: ..any) {
 }
 
 log_error :: proc(format: string, args: ..any) {
+    _log_impl(.Error, format, ..args)
+}
+
+// Exported companions for dynlib — take slice instead of variadic.
+@(export, link_name="bld_log_info")
+_bld_log_info :: proc(format: string, args: []any) {
+    _log_impl(.Info, format, ..args)
+}
+
+@(export, link_name="bld_log_warn")
+_bld_log_warn :: proc(format: string, args: []any) {
+    _log_impl(.Warning, format, ..args)
+}
+
+@(export, link_name="bld_log_error")
+_bld_log_error :: proc(format: string, args: []any) {
     _log_impl(.Error, format, ..args)
 }
 

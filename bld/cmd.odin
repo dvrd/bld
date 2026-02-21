@@ -15,6 +15,7 @@ Cmd :: struct {
 }
 
 // Create a new empty command.
+@(export, link_name="bld_cmd_create")
 cmd_create :: proc(allocator := context.allocator) -> Cmd {
     return Cmd{
         items     = make([dynamic]string, allocator),
@@ -29,7 +30,16 @@ cmd_append :: proc(cmd: ^Cmd, args: ..string) {
     }
 }
 
+// Exported companion for dynlib — takes slice instead of variadic.
+@(export, link_name="bld_cmd_append")
+_bld_cmd_append :: proc(cmd: ^Cmd, args: []string) {
+    for arg in args {
+        append(&cmd.items, strings.clone(arg, cmd.allocator))
+    }
+}
+
 // Append all arguments from another command.
+@(export, link_name="bld_cmd_extend")
 cmd_extend :: proc(cmd: ^Cmd, other: Cmd) {
     for arg in other.items {
         append(&cmd.items, strings.clone(arg, cmd.allocator))
@@ -37,6 +47,7 @@ cmd_extend :: proc(cmd: ^Cmd, other: Cmd) {
 }
 
 // Reset the command to empty (frees cloned strings, keeps capacity).
+@(export, link_name="bld_cmd_reset")
 cmd_reset :: proc(cmd: ^Cmd) {
     for arg in cmd.items {
         delete(arg, cmd.allocator)
@@ -45,6 +56,7 @@ cmd_reset :: proc(cmd: ^Cmd) {
 }
 
 // Free all memory held by a command.
+@(export, link_name="bld_cmd_destroy")
 cmd_destroy :: proc(cmd: ^Cmd) {
     for arg in cmd.items {
         delete(arg, cmd.allocator)
@@ -53,6 +65,7 @@ cmd_destroy :: proc(cmd: ^Cmd) {
 }
 
 // Render a command as a human-readable string for logging.
+@(export, link_name="bld_cmd_render")
 cmd_render :: proc(cmd: Cmd, allocator := context.temp_allocator) -> string {
     sb := strings.builder_make(allocator)
     for arg, i in cmd.items {
@@ -93,6 +106,7 @@ Cmd_Run_Opt :: struct {
 }
 
 // Run a command with default options (synchronous, resets after).
+@(export, link_name="bld_cmd_run")
 cmd_run :: proc(cmd: ^Cmd, opt: Cmd_Run_Opt = {}) -> bool {
     if len(cmd.items) == 0 {
         log_error("Cannot run empty command")
@@ -212,6 +226,7 @@ cmd_run :: proc(cmd: ^Cmd, opt: Cmd_Run_Opt = {}) -> bool {
 }
 
 // Run a command and capture its stdout as a byte slice.
+@(export, link_name="bld_cmd_run_capture")
 cmd_run_capture :: proc(
     cmd: ^Cmd,
     allocator := context.allocator,

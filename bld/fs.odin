@@ -15,6 +15,7 @@ File_Type :: enum {
 }
 
 // Create a directory if it does not already exist.
+@(export, link_name="bld_mkdir_if_not_exists")
 mkdir_if_not_exists :: proc(path: string) -> bool {
     err := os.mkdir(path)
     if err != nil {
@@ -30,6 +31,7 @@ mkdir_if_not_exists :: proc(path: string) -> bool {
 }
 
 // Create directories recursively (like mkdir -p).
+@(export, link_name="bld_mkdir_all")
 mkdir_all :: proc(path: string) -> bool {
     err := os.mkdir_all(path)
     if err != nil {
@@ -45,6 +47,7 @@ mkdir_all :: proc(path: string) -> bool {
 }
 
 // Copy a single file from src to dst using streaming (constant memory).
+@(export, link_name="bld_copy_file")
 copy_file :: proc(src_path, dst_path: string) -> bool {
     if echo_actions do log_info("copying %s -> %s", src_path, dst_path)
 
@@ -86,6 +89,7 @@ copy_file :: proc(src_path, dst_path: string) -> bool {
 }
 
 // Read an entire file into a byte slice.
+@(export, link_name="bld_read_entire_file")
 read_entire_file :: proc(
     path: string,
     allocator := context.allocator,
@@ -99,6 +103,7 @@ read_entire_file :: proc(
 }
 
 // Write data to a file (creates or truncates).
+@(export, link_name="bld_write_entire_file")
 write_entire_file :: proc(path: string, data: []u8) -> bool {
     err := os.write_entire_file(path, data)
     if err != nil {
@@ -109,6 +114,7 @@ write_entire_file :: proc(path: string, data: []u8) -> bool {
 }
 
 // Write a string to a file (creates or truncates).
+@(export, link_name="bld_write_entire_file_string")
 write_entire_file_string :: proc(path: string, content: string) -> bool {
     err := os.write_entire_file(path, content)
     if err != nil {
@@ -119,6 +125,7 @@ write_entire_file_string :: proc(path: string, content: string) -> bool {
 }
 
 // Delete a file.
+@(export, link_name="bld_delete_file")
 delete_file :: proc(path: string) -> bool {
     err := os.remove(path)
     if err != nil {
@@ -129,6 +136,7 @@ delete_file :: proc(path: string) -> bool {
 }
 
 // Remove a file or directory recursively (like rm -rf).
+@(export, link_name="bld_remove_all")
 remove_all :: proc(path: string) -> bool {
     err := os.remove_all(path)
     if err != nil {
@@ -139,6 +147,7 @@ remove_all :: proc(path: string) -> bool {
 }
 
 // Rename or move a file.
+@(export, link_name="bld_rename_file")
 rename_file :: proc(old_path, new_path: string) -> bool {
     err := os.rename(old_path, new_path)
     if err != nil {
@@ -149,6 +158,7 @@ rename_file :: proc(old_path, new_path: string) -> bool {
 }
 
 // Get the type of a file.
+@(export, link_name="bld_get_file_type")
 get_file_type :: proc(path: string) -> (File_Type, bool) {
     info, err := os.stat(path, context.temp_allocator)
     if err != nil {
@@ -165,6 +175,7 @@ get_file_type :: proc(path: string) -> (File_Type, bool) {
 }
 
 // Check if a file exists.
+@(export, link_name="bld_file_exists")
 file_exists :: proc(path: string) -> bool {
     _, err := os.stat(path, context.temp_allocator)
     return err == nil
@@ -173,6 +184,7 @@ file_exists :: proc(path: string) -> bool {
 // Read all entries in a directory (names only, not full paths).
 // Always reads directory entries with temp allocator internally,
 // then clones names into the caller's allocator.
+@(export, link_name="bld_read_entire_dir")
 read_entire_dir :: proc(
     dir_path: string,
     allocator := context.allocator,
@@ -199,6 +211,7 @@ read_entire_dir :: proc(
 }
 
 // Copy a directory recursively.
+@(export, link_name="bld_copy_directory_recursively")
 copy_directory_recursively :: proc(src_path, dst_path: string) -> bool {
     if echo_actions do log_info("copying directory %s -> %s", src_path, dst_path)
 
