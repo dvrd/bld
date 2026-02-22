@@ -167,6 +167,13 @@ Build_Config :: struct {
     extra_flags: []string,
 }
 
+// Return the Odin compiler version this library was compiled with.
+// Called by bindings at init to detect version mismatch with the user's compiler.
+@(export, link_name="bld_lib_odin_version")
+_bld_lib_odin_version :: proc() -> string {
+    return ODIN_VERSION
+}
+
 // Build an Odin package. Returns true on success.
 @(export, link_name="bld_build")
 build :: proc(config: Build_Config) -> bool {

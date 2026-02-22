@@ -13,9 +13,7 @@ import "core:time"
 
 // ── Metadata ─────────────────────────────────────────────────────
 
-BLD_VERSION            :: "0.1.0"
-BLD_ODIN_COMPILER      :: ODIN_VERSION
-BLD_ODIN_COMPILER_HASH :: ODIN_VERSION_HASH
+BLD_VERSION :: "0.1.0"
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -302,12 +300,13 @@ _Bld_API :: struct {
     walk_dir: proc(root: string, callback: Walk_Proc, opt: Walk_Opt) -> bool,
 
     // From odin.odin (run companion takes []string):
-    build:          proc(config: Build_Config) -> bool,
-    run:            proc(config: Build_Config, args: []string) -> bool,
-    test:           proc(config: Build_Config) -> bool,
-    check:          proc(config: Build_Config) -> bool,
-    release_config: proc(package_path: string, out: string) -> Build_Config,
-    debug_config:   proc(package_path: string, out: string) -> Build_Config,
+    lib_odin_version: proc() -> string,
+    build:            proc(config: Build_Config) -> bool,
+    run:              proc(config: Build_Config, args: []string) -> bool,
+    test:             proc(config: Build_Config) -> bool,
+    check:            proc(config: Build_Config) -> bool,
+    release_config:   proc(package_path: string, out: string) -> Build_Config,
+    debug_config:     proc(package_path: string, out: string) -> Build_Config,
 
     // From rebuild.odin (go_rebuild_urself companion takes []string):
     needs_rebuild:     proc(output_path: string, input_paths: []string) -> int,
@@ -376,20 +375,26 @@ _load_bld :: proc() {
 
     // Load global variable pointers.
     ml_ptr, ml_ok := dynlib.symbol_address(_api.__handle, "bld_minimal_log_level")
-    if ml_ok {
-        minimal_log_level = (^Log_Level)(ml_ptr)
+    if !ml_ok {
+        fmt.eprintfln("[bld] Could not load 'minimal_log_level' from library")
+        os.exit(1)
     }
+    minimal_log_level = (^Log_Level)(ml_ptr)
 
     ea_ptr, ea_ok := dynlib.symbol_address(_api.__handle, "bld_echo_actions")
-    if ea_ok {
-        echo_actions = (^bool)(ea_ptr)
+    if !ea_ok {
+        fmt.eprintfln("[bld] Could not load 'echo_actions' from library")
+        os.exit(1)
     }
+    echo_actions = (^bool)(ea_ptr)
 
-    // Version mismatch warning.
-    if BLD_ODIN_COMPILER != ODIN_VERSION {
+    // Version mismatch warning: compare the dylib's baked-in version against
+    // the user's compiler version (baked when they compile the bindings).
+    lib_version := _api.lib_odin_version()
+    if lib_version != ODIN_VERSION {
         fmt.eprintfln(
             "[bld] Warning: library compiled with Odin %s, you are using %s. ABI mismatch may cause crashes.",
-            BLD_ODIN_COMPILER, ODIN_VERSION,
+            lib_version, ODIN_VERSION,
         )
     }
 }

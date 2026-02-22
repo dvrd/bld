@@ -186,71 +186,7 @@ go_rebuild_urself :: proc(source_path: string, extra_sources: ..string) {
 // Exported companion for dynlib — takes slice instead of variadic.
 @(export, link_name="bld_go_rebuild_urself")
 _bld_go_rebuild_urself :: proc(source_path: string, extra_sources: []string) {
-    // Get the path to the currently running executable.
-    binary_path := _get_self_exe_path() or_else ""
-    if len(binary_path) == 0 {
-        log_error("Could not determine executable path, skipping rebuild check")
-        return
-    }
-
-    // Collect all source paths to check.
-    all_sources := make([dynamic]string, context.temp_allocator)
-    append(&all_sources, source_path)
-    for extra in extra_sources {
-        append(&all_sources, extra)
-    }
-
-    // Check if rebuild is needed.
-    rebuild := needs_rebuild(binary_path, all_sources[:])
-    if rebuild < 0 {
-        runtime.exit(1)
-    }
-    if rebuild == 0 {
-        return
-    }
-
-    log_info("Build script changed, rebuilding...")
-
-    old_path := strings.concatenate({binary_path, ".old"}, context.temp_allocator)
-    if !rename_file(binary_path, old_path) {
-        runtime.exit(1)
-    }
-
-    rebuild_cmd := cmd_create(context.temp_allocator)
-    cmd_append(&rebuild_cmd, "odin", "build", source_path, "-o:speed")
-    cmd_append(&rebuild_cmd, fmt.tprintf("-out:%s", binary_path))
-
-    if !cmd_run(&rebuild_cmd, {dont_reset = true}) {
-        rename_file(old_path, binary_path)
-        runtime.exit(1)
-    }
-
-    delete_file(old_path)
-
-    exec_cmd := cmd_create(context.temp_allocator)
-    cmd_append(&exec_cmd, binary_path)
-    for arg in os.args[1:] {
-        cmd_append(&exec_cmd, arg)
-    }
-
-    exec_command := make([]string, len(exec_cmd.items), context.temp_allocator)
-    for arg, i in exec_cmd.items {
-        exec_command[i] = arg
-    }
-
-    process, start_err := os.process_start(os.Process_Desc{command = exec_command})
-    if start_err != nil {
-        log_error("Could not re-execute '%s': %v", binary_path, start_err)
-        runtime.exit(1)
-    }
-
-    state, wait_err := os.process_wait(process)
-    if wait_err != nil {
-        log_error("Could not wait for re-executed process: %v", wait_err)
-        runtime.exit(1)
-    }
-
-    runtime.exit(int(state.exit_code))
+    go_rebuild_urself(source_path, ..extra_sources)
 }
 
 // Helper: get the path to the currently running executable.
