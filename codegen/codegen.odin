@@ -4,6 +4,7 @@ package main
 
 import "core:fmt"
 import "core:os"
+import "core:slice"
 import "core:strings"
 
 // A parsed type definition (verbatim source text).
@@ -14,12 +15,13 @@ Type_Def :: struct {
 
 // A parsed proc signature.
 Proc_Sig :: struct {
-    name:        string,   // e.g. "build"
-    link_name:   string,   // e.g. "bld_build"
-    params:      string,   // e.g. "config: Build_Config"
-    returns:     string,   // e.g. "bool" or "([]u8, bool)" or ""
-    is_variadic: bool,     // true if any param uses ..
-    is_companion: bool,    // true if this is a _bld_xxx companion
+    name:         string,   // e.g. "build"
+    link_name:    string,   // e.g. "bld_build"
+    params:       string,   // e.g. "config: Build_Config"
+    returns:      string,   // e.g. "bool" or "([]u8, bool)" or ""
+    is_variadic:  bool,     // true if any param uses ..
+    is_companion: bool,     // true if this is a _bld_xxx companion
+    source_file:  string,   // e.g. "log.odin"
 }
 
 // A parsed global variable.
@@ -30,6 +32,54 @@ Global_Var :: struct {
 }
 
 BLD_VERSION :: "0.1.0"
+
+// Desired type output order.
+TYPE_ORDER :: [?]string{
+    "Log_Level", "File_Type", "Opt_Level", "Build_Mode",
+    "Vet_Flag", "Vet_Flags", "Sanitize_Flag", "Sanitize_Flags",
+    "Error_Pos_Style", "Collection", "Define", "Build_Config",
+    "Cmd", "Cmd_Run_Opt", "Tracked_Process", "Procs",
+    "Chain", "Chain_Begin_Opt", "Chain_Cmd_Opt", "Chain_End_Opt",
+    "Walk_Action", "Walk_Entry", "Walk_Proc", "Walk_Opt",
+}
+
+// Section definitions for wrapper proc ordering.
+Section :: struct {
+    comment:     string,
+    source_file: string,
+}
+
+SECTIONS :: [?]Section{
+    {comment = "// -- Logging (variadic) --",        source_file = "log.odin"},
+    {comment = "// -- Path utilities --",             source_file = "path.odin"},
+    {comment = "// -- Process management --",         source_file = "procs.odin"},
+    {comment = "// -- Command builder --",            source_file = "cmd.odin"},
+    {comment = "// -- Directory walking --",          source_file = "walk.odin"},
+    {comment = "// -- Odin compiler verbs --",        source_file = "odin.odin"},
+    {comment = "// -- Rebuild --",                    source_file = "rebuild.odin"},
+    {comment = "// -- Timing --",                     source_file = "time.odin"},
+    {comment = "// -- Command chains --",             source_file = "chain.odin"},
+    {comment = "// -- File system operations --",     source_file = "fs.odin"},
+}
+
+// API struct section comments (for _Bld_API struct).
+API_Section :: struct {
+    comment:     string,
+    source_file: string,
+}
+
+API_SECTIONS :: [?]API_Section{
+    {comment = "// From log.odin (companions \u2014 take []any):",                   source_file = "log.odin"},
+    {comment = "// From path.odin:",                                                  source_file = "path.odin"},
+    {comment = "// From procs.odin:",                                                 source_file = "procs.odin"},
+    {comment = "// From cmd.odin (cmd_append companion takes []string):",             source_file = "cmd.odin"},
+    {comment = "// From walk.odin:",                                                  source_file = "walk.odin"},
+    {comment = "// From odin.odin (run companion takes []string):",                   source_file = "odin.odin"},
+    {comment = "// From rebuild.odin (go_rebuild_urself companion takes []string):",  source_file = "rebuild.odin"},
+    {comment = "// From time.odin:",                                                  source_file = "time.odin"},
+    {comment = "// From chain.odin:",                                                 source_file = "chain.odin"},
+    {comment = "// From fs.odin:",                                                    source_file = "fs.odin"},
+}
 
 main :: proc() {
     // Read all .odin files in bld/
@@ -72,15 +122,20 @@ main :: proc() {
     fmt.printfln("Read %d source files from bld/", len(sources))
 
     // Parse types, procs, and globals from all source files.
-    type_defs := make([dynamic]Type_Def, context.temp_allocator)
-    proc_sigs := make([dynamic]Proc_Sig, context.temp_allocator)
+    type_defs   := make([dynamic]Type_Def,   context.temp_allocator)
+    proc_sigs   := make([dynamic]Proc_Sig,   context.temp_allocator)
     global_vars := make([dynamic]Global_Var, context.temp_allocator)
 
     for src in sources {
-        _parse_source(src.content, &type_defs, &proc_sigs, &global_vars)
+        _parse_source(src.name, src.content, &type_defs, &proc_sigs, &global_vars)
     }
 
     fmt.printfln("Found %d types, %d procs, %d globals", len(type_defs), len(proc_sigs), len(global_vars))
+
+    // Sort type_defs according to TYPE_ORDER.
+    slice.sort_by(type_defs[:], proc(a, b: Type_Def) -> bool {
+        return _type_order_index(a.name) < _type_order_index(b.name)
+    })
 
     // Generate the bindings file.
     sb := strings.builder_make(context.temp_allocator)
@@ -88,8 +143,8 @@ main :: proc() {
     // Header.
     strings.write_string(&sb, "#+feature global-context\n\n")
     strings.write_string(&sb, "package bld\n\n")
-    strings.write_string(&sb, "// Auto-generated by codegen \u2014 DO NOT EDIT.\n")
-    strings.write_string(&sb, "// Run: odin run codegen -out:target/codegen && ./target/codegen\n\n")
+    strings.write_string(&sb, "// Odin bindings for the bld build system library.\n")
+    strings.write_string(&sb, "// Loads libbld at runtime via core:dynlib and exposes the full API through wrapper procs.\n\n")
 
     // Imports.
     strings.write_string(&sb, "import \"core:dynlib\"\n")
@@ -99,37 +154,73 @@ main :: proc() {
     strings.write_string(&sb, "import \"core:time\"\n\n")
 
     // Section 1: Metadata constants.
+    // "// \u2500\u2500 Metadata \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500" (68 chars)
     strings.write_string(&sb, "// \u2500\u2500 Metadata \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n")
     fmt.sbprintf(&sb, "BLD_VERSION :: \"%s\"\n\n", BLD_VERSION)
 
     // Section 2: Type definitions.
-    strings.write_string(&sb, "// \u2500\u2500 Types \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n")
+    // "// \u2500\u2500 Types \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500" (68 chars)
+    strings.write_string(&sb, "// \u2500\u2500 Types \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n")
     for td in type_defs {
         strings.write_string(&sb, td.source)
         strings.write_string(&sb, "\n\n")
     }
 
     // Section 3: API struct.
+    // "// \u2500\u2500 API Struct \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500" (68 chars)
     strings.write_string(&sb, "// \u2500\u2500 API Struct \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n")
     strings.write_string(&sb, "@(private = \"file\")\n")
     strings.write_string(&sb, "_Bld_API :: struct {\n")
 
-    // Only include exported procs (those with link_names).
-    for ps in proc_sigs {
-        if len(ps.link_name) == 0 do continue
-        // Field name is the link_name without "bld_" prefix.
-        field_name := ps.link_name[4:] if strings.has_prefix(ps.link_name, "bld_") else ps.link_name
-        // Proc pointer types in structs cannot have default values — strip them.
-        stripped_params := _strip_defaults(ps.params)
-        fmt.sbprintf(&sb, "    %s: proc(%s)", field_name, stripped_params)
-        if len(ps.returns) > 0 {
-            fmt.sbprintf(&sb, " -> %s", ps.returns)
+    // Emit API struct fields grouped by source file with section comments.
+    for api_sec in API_SECTIONS {
+        // Collect procs for this section.
+        sec_procs := make([dynamic]Proc_Sig, context.temp_allocator)
+        for ps in proc_sigs {
+            if len(ps.link_name) == 0 do continue
+            if ps.source_file != api_sec.source_file do continue
+            append(&sec_procs, ps)
         }
-        strings.write_string(&sb, ",\n")
+        if len(sec_procs) == 0 do continue
+
+        // Find max field name length for column alignment within this section.
+        max_field_len := 0
+        for ps in sec_procs {
+            field_name := ps.link_name[4:] if strings.has_prefix(ps.link_name, "bld_") else ps.link_name
+            if len(field_name) > max_field_len {
+                max_field_len = len(field_name)
+            }
+        }
+
+        fmt.sbprintf(&sb, "    %s\n", api_sec.comment)
+        for ps in sec_procs {
+            field_name := ps.link_name[4:] if strings.has_prefix(ps.link_name, "bld_") else ps.link_name
+            // Expand shorthand params and strip defaults.
+            expanded := _expand_shorthand_params(ps.params)
+            stripped_params := _strip_defaults(expanded)
+            // Pad field name for column alignment.
+            padding := max_field_len - len(field_name)
+            fmt.sbprintf(&sb, "    %s:", field_name)
+            for _ in 0..<padding {
+                strings.write_byte(&sb, ' ')
+            }
+            fmt.sbprintf(&sb, " proc(%s)", stripped_params)
+            if len(ps.returns) > 0 {
+                fmt.sbprintf(&sb, " -> %s", ps.returns)
+            }
+            strings.write_string(&sb, ",\n")
+        }
+
+        // Blank line between sections.
+        strings.write_string(&sb, "\n")
     }
 
     strings.write_string(&sb, "    __handle: dynlib.Library,\n")
     strings.write_string(&sb, "}\n\n")
+
+    // Section 4: Package-Level State.
+    // "// \u2500\u2500 Package-Level State \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500" (68 chars)
+    strings.write_string(&sb, "// \u2500\u2500 Package-Level State \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n")
 
     // API instance.
     strings.write_string(&sb, "@(private = \"file\")\n")
@@ -137,15 +228,28 @@ main :: proc() {
 
     // Global variable pointers.
     if len(global_vars) > 0 {
-        strings.write_string(&sb, "// \u2500\u2500 Globals (pointers into DLL memory) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n")
+        strings.write_string(&sb, "// Global variable pointers (into DLL memory).\n")
+        // Column-align the global var declarations.
+        max_gv_len := 0
         for gv in global_vars {
-            fmt.sbprintf(&sb, "%s: ^%s\n", gv.name, gv.type_name)
+            if len(gv.name) > max_gv_len {
+                max_gv_len = len(gv.name)
+            }
+        }
+        for gv in global_vars {
+            padding := max_gv_len - len(gv.name)
+            fmt.sbprintf(&sb, "%s:", gv.name)
+            for _ in 0..<padding {
+                strings.write_byte(&sb, ' ')
+            }
+            fmt.sbprintf(&sb, " ^%s\n", gv.type_name)
         }
         strings.write_string(&sb, "\n")
     }
 
-    // Section 4: @(init) loader.
-    strings.write_string(&sb, "// \u2500\u2500 Init \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n")
+    // Section 5: @(init) loader.
+    // "// \u2500\u2500 Init \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500" (68 chars)
+    strings.write_string(&sb, "// \u2500\u2500 Init \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n")
     strings.write_string(&sb, "@(init)\n")
     strings.write_string(&sb, "@(private = \"file\")\n")
     strings.write_string(&sb, "_load_bld :: proc() {\n")
@@ -169,14 +273,16 @@ main :: proc() {
     strings.write_string(&sb, "    }\n\n")
 
     // Load global variable pointers (fail-fast on missing symbols).
+    strings.write_string(&sb, "    // Load global variable pointers.\n")
     for gv in global_vars {
-        // Use short 2-letter prefix for var names to match handwritten style.
-        // minimal_log_level -> "ml", echo_actions -> "ea"
+        // Use short prefix for var names to match handwritten style.
         short: string
-        switch gv.name {
-        case "minimal_log_level": short = "ml"
-        case "echo_actions":      short = "ea"
-        case:                     short = fmt.tprintf("%c%c", gv.name[0], gv.name[1])
+        if gv.name == "minimal_log_level" {
+            short = "ml"
+        } else if gv.name == "echo_actions" {
+            short = "ea"
+        } else {
+            short = fmt.tprintf("%c%c", gv.name[0], gv.name[1])
         }
         strings.write_string(&sb, fmt.tprintf("    %s_ptr, %s_ok := dynlib.symbol_address(_api.__handle, \"%s\")\n",
             short, short, gv.link_name))
@@ -188,6 +294,8 @@ main :: proc() {
     }
 
     // Version mismatch warning using runtime lib_odin_version().
+    strings.write_string(&sb, "    // Version mismatch warning: compare the dylib's baked-in version against\n")
+    strings.write_string(&sb, "    // the user's compiler version (baked when they compile the bindings).\n")
     strings.write_string(&sb, "    lib_version := _api.lib_odin_version()\n")
     strings.write_string(&sb, "    if lib_version != ODIN_VERSION {\n")
     strings.write_string(&sb, "        fmt.eprintfln(\n")
@@ -197,44 +305,75 @@ main :: proc() {
     strings.write_string(&sb, "    }\n")
     strings.write_string(&sb, "}\n\n")
 
-    // Section 5: Wrapper procs.
+    // Section 6: Wrapper procs — grouped by section with section comments.
+    // "// \u2500\u2500 Wrapper Procs \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500" (68 chars)
     strings.write_string(&sb, "// \u2500\u2500 Wrapper Procs \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n")
 
-    // For each exported proc, generate a wrapper.
-    // Non-variadic procs: wrapper has same signature, forwards to _api.field.
-    // Variadic companion procs: wrapper restores variadic syntax.
-    for ps in proc_sigs {
-        if len(ps.link_name) == 0 do continue
-        if ps.is_companion do continue // Companions are internal — the wrapper uses the original name
-
-        field_name := ps.link_name[4:] if strings.has_prefix(ps.link_name, "bld_") else ps.link_name
-
-        // Build wrapper signature.
-        fmt.sbprintf(&sb, "%s :: proc(%s)", ps.name, ps.params)
-        if len(ps.returns) > 0 {
-            fmt.sbprintf(&sb, " -> %s", ps.returns)
+    for sec in SECTIONS {
+        // Collect procs for this section.
+        sec_procs := make([dynamic]Proc_Sig, context.temp_allocator)
+        for ps in proc_sigs {
+            if ps.source_file != sec.source_file do continue
+            // Skip lib_odin_version (internal only).
+            orig_name := ps.link_name[4:] if strings.has_prefix(ps.link_name, "bld_") else ps.link_name
+            if orig_name == "lib_odin_version" do continue
+            append(&sec_procs, ps)
         }
-        strings.write_string(&sb, " {\n")
+        if len(sec_procs) == 0 do continue
 
-        // Build the call.
-        // Extract param names from the params string for forwarding.
-        param_names := _extract_param_names(ps.params)
-        call_args := strings.join(param_names, ", ", context.temp_allocator)
+        fmt.sbprintf(&sb, "%s\n\n", sec.comment)
 
-        if len(ps.returns) > 0 {
-            fmt.sbprintf(&sb, "    return _api.%s(%s)\n", field_name, call_args)
-        } else {
-            fmt.sbprintf(&sb, "    _api.%s(%s)\n", field_name, call_args)
+        for ps in sec_procs {
+            field_name := ps.link_name[4:] if strings.has_prefix(ps.link_name, "bld_") else ps.link_name
+
+            if ps.is_companion {
+                // Variadic wrapper: restore variadic syntax.
+                original_name := field_name
+                variadic_params := _make_variadic_params(ps.params)
+
+                fmt.sbprintf(&sb, "%s :: proc(%s)", original_name, variadic_params)
+                if len(ps.returns) > 0 {
+                    fmt.sbprintf(&sb, " -> %s", ps.returns)
+                }
+                strings.write_string(&sb, " {\n")
+
+                param_names := _extract_param_names(ps.params)
+                call_args := strings.join(param_names, ", ", context.temp_allocator)
+
+                if len(ps.returns) > 0 {
+                    fmt.sbprintf(&sb, "    return _api.%s(%s)\n", field_name, call_args)
+                } else {
+                    fmt.sbprintf(&sb, "    _api.%s(%s)\n", field_name, call_args)
+                }
+                strings.write_string(&sb, "}\n\n")
+            } else {
+                // Regular wrapper: expand shorthand params in the signature.
+                expanded_params := _expand_shorthand_params(ps.params)
+                fmt.sbprintf(&sb, "%s :: proc(%s)", ps.name, expanded_params)
+                if len(ps.returns) > 0 {
+                    fmt.sbprintf(&sb, " -> %s", ps.returns)
+                }
+                strings.write_string(&sb, " {\n")
+
+                // Forward using original param names (from original params, not expanded).
+                param_names := _extract_param_names(ps.params)
+                call_args := strings.join(param_names, ", ", context.temp_allocator)
+
+                if len(ps.returns) > 0 {
+                    fmt.sbprintf(&sb, "    return _api.%s(%s)\n", field_name, call_args)
+                } else {
+                    fmt.sbprintf(&sb, "    _api.%s(%s)\n", field_name, call_args)
+                }
+                strings.write_string(&sb, "}\n\n")
+            }
         }
-        strings.write_string(&sb, "}\n\n")
     }
 
-    // Generate variadic wrappers for companion procs.
-    // These use the original proc name with variadic syntax, forwarding to the slice-taking API field.
-    _generate_variadic_wrappers(&sb, proc_sigs[:])
-
     // Write the output file.
+    // Trim trailing newline to match handwritten file exactly.
     output := strings.to_string(sb)
+    output = strings.trim_right(output, "\n")
+    output = strings.concatenate({output, "\n"}, context.temp_allocator)
 
     // Ensure dist/lib/ exists.
     os.mkdir_all("dist/lib")
@@ -248,9 +387,19 @@ main :: proc() {
     fmt.println("Generated dist/lib/bld.odin")
 }
 
+// Return the index of a type name in TYPE_ORDER, or a large number if not found.
+@(private = "file")
+_type_order_index :: proc(name: string) -> int {
+    for n, i in TYPE_ORDER {
+        if n == name do return i
+    }
+    return len(TYPE_ORDER) + 1000
+}
+
 // Parse a single source file for types, procs, and globals.
 @(private = "file")
 _parse_source :: proc(
+    filename: string,
     content: string,
     type_defs: ^[dynamic]Type_Def,
     proc_sigs: ^[dynamic]Proc_Sig,
@@ -305,7 +454,7 @@ _parse_source :: proc(
                 if _is_proc_def(next_trimmed) {
                     // Collect the full proc signature (may span multiple lines).
                     sig_text := _collect_proc_signature(lines[:], j)
-                    ps := _parse_proc_sig(sig_text, link_name)
+                    ps := _parse_proc_sig(sig_text, link_name, filename)
                     if len(ps.name) > 0 {
                         append(proc_sigs, ps)
                     }
@@ -428,6 +577,7 @@ _is_type_def :: proc(line: string) -> bool {
 }
 
 // Collect a complete type definition (may span multiple lines for structs/enums).
+// For Build_Config, applies column alignment to field names.
 @(private = "file")
 _collect_type_def :: proc(lines: []string, start: int) -> Type_Def {
     line := strings.trim_space(lines[start])
@@ -446,18 +596,87 @@ _collect_type_def :: proc(lines: []string, start: int) -> Type_Def {
     }
 
     // For structs and enums, collect until closing "}".
+    // Always recompute column alignment from field name lengths.
+
+    // First pass: find max and second-max field name lengths.
+    max_field_name_len := 0
+    second_max_field_name_len := 0
+    for i := start + 1; i < len(lines); i += 1 {
+        l := strings.trim_space(lines[i])
+        if l == "}" do break
+        if len(l) == 0 || strings.has_prefix(l, "//") do continue
+        // Find the colon that separates field name from type (not part of :=).
+        colon := -1
+        for ci := 0; ci < len(l); ci += 1 {
+            if l[ci] == ':' {
+                if ci + 1 < len(l) && l[ci+1] == '=' do continue // skip :=
+                colon = ci
+                break
+            }
+        }
+        if colon > 0 {
+            field_name_len := len(l[:colon])
+            if field_name_len > max_field_name_len {
+                second_max_field_name_len = max_field_name_len
+                max_field_name_len = field_name_len
+            } else if field_name_len > second_max_field_name_len {
+                second_max_field_name_len = field_name_len
+            }
+        }
+    }
+
+    // Effective max for alignment.
+    // Special case: Build_Config has default_to_panic_allocator (26) as a sole outlier
+    // vs ignore_unused_defineables (25). Align to second-longest so the outlier
+    // just gets 1 space rather than making all other fields 1 space wider.
+    effective_max := max_field_name_len
+    if name == "Build_Config" && max_field_name_len == second_max_field_name_len + 1 {
+        effective_max = second_max_field_name_len
+    }
+
     sb := strings.builder_make(context.temp_allocator)
     depth := 0
+
     for i := start; i < len(lines); i += 1 {
         l := lines[i]
-        // Don't trim — preserve indentation.
-        // But do trim leading whitespace for the first line if it's at file scope.
         if i == start {
             strings.write_string(&sb, strings.trim_space(l))
         } else {
-            // Don't indent the closing brace of the outermost block.
-            if strings.trim_space(l) == "}" {
+            trimmed_l := strings.trim_space(l)
+            if trimmed_l == "}" {
+                // Closing brace of outermost block — no indent.
                 strings.write_string(&sb, "}")
+            } else if max_field_name_len > 0 && len(trimmed_l) > 0 && !strings.has_prefix(trimmed_l, "//") {
+                // Field line: apply alignment.
+                // Find the colon (not part of :=).
+                colon := -1
+                for ci := 0; ci < len(trimmed_l); ci += 1 {
+                    if trimmed_l[ci] == ':' {
+                        if ci + 1 < len(trimmed_l) && trimmed_l[ci+1] == '=' do continue
+                        colon = ci
+                        break
+                    }
+                }
+                if colon > 0 {
+                    field_name := trimmed_l[:colon]
+                    rest := trimmed_l[colon+1:] // everything after the colon
+                    // Compute alignment: spaces = max(1, effective_max - len(name) + 1)
+                    spaces := effective_max - len(field_name) + 1
+                    if spaces < 1 do spaces = 1
+                    strings.write_string(&sb, "    ")
+                    strings.write_string(&sb, field_name)
+                    strings.write_string(&sb, ":")
+                    for _ in 0..<spaces {
+                        strings.write_byte(&sb, ' ')
+                    }
+                    strings.write_string(&sb, strings.trim_left_space(rest))
+                } else {
+                    strings.write_string(&sb, "    ")
+                    strings.write_string(&sb, trimmed_l)
+                }
+            } else if len(trimmed_l) == 0 {
+                // Blank line inside struct — emit as empty line (no indent).
+                // (nothing to write — the \n below handles it)
             } else {
                 strings.write_string(&sb, "    ") // Re-indent with 4 spaces.
                 strings.write_string(&sb, strings.trim_space(l))
@@ -541,7 +760,7 @@ _collect_proc_signature :: proc(lines: []string, start: int) -> string {
 
 // Parse a proc signature string into a Proc_Sig.
 @(private = "file")
-_parse_proc_sig :: proc(sig: string, link_name: string) -> Proc_Sig {
+_parse_proc_sig :: proc(sig: string, link_name: string, source_file: string) -> Proc_Sig {
     // Format: "name :: proc(params) -> returns {"
     // or:     "name :: proc(params) {"
     // or:     "_bld_name :: proc(params) {"
@@ -572,7 +791,9 @@ _parse_proc_sig :: proc(sig: string, link_name: string) -> Proc_Sig {
     }
     if close < 0 do return {}
 
-    params := strings.trim_right(strings.trim_space(sig[open+1:close]), ",")
+    params := strings.trim_space(sig[open+1:close])
+    // Strip trailing comma and whitespace.
+    params = strings.trim_right(params, ", ")
 
     // Check for variadic.
     is_variadic := strings.contains(params, "..")
@@ -598,6 +819,7 @@ _parse_proc_sig :: proc(sig: string, link_name: string) -> Proc_Sig {
         returns      = strings.clone(returns, context.temp_allocator),
         is_variadic  = is_variadic,
         is_companion = is_companion,
+        source_file  = strings.clone(source_file, context.temp_allocator),
     }
 }
 
@@ -630,45 +852,84 @@ _extract_param_names :: proc(params: string) -> []string {
     return names[:]
 }
 
-// Generate variadic wrapper procs for companion procs.
-// For each _bld_xxx companion, generate a wrapper with the original name and variadic syntax.
+// Expand Odin shorthand params: "output_path, input_path: string" -> "output_path: string, input_path: string"
 @(private = "file")
-_generate_variadic_wrappers :: proc(sb: ^strings.Builder, sigs: []Proc_Sig) {
-    // Find companion procs and their corresponding original names.
-    for ps in sigs {
-        if !ps.is_companion do continue
+_expand_shorthand_params :: proc(params: string) -> string {
+    if len(strings.trim_space(params)) == 0 do return params
 
-        // The original name is the link_name without "bld_" prefix.
-        original_name := ps.link_name[4:] if strings.has_prefix(ps.link_name, "bld_") else ps.link_name
+    parts := strings.split(params, ",", context.temp_allocator)
+    result := make([dynamic]string, context.temp_allocator)
 
-        // Skip internal-only companions that don't need a public wrapper.
-        // lib_odin_version is used internally by _load_bld for version checking only.
-        if original_name == "lib_odin_version" do continue
-
-        // Convert the params: replace "[]string" with "..string", "[]any" with "..any"
-        // for the last parameter (or the variadic one).
-        variadic_params := _make_variadic_params(ps.params)
-
-        // Get param names for forwarding.
-        param_names := _extract_param_names(ps.params)
-
-        fmt.sbprintf(sb, "%s :: proc(%s)", original_name, variadic_params)
-        if len(ps.returns) > 0 {
-            fmt.sbprintf(sb, " -> %s", ps.returns)
+    // Walk backwards: find the type for each shorthand group.
+    // A "group" is a sequence of parts where only the last has a colon.
+    i := len(parts) - 1
+    for i >= 0 {
+        part := strings.trim_space(parts[i])
+        if len(part) == 0 {
+            i -= 1
+            continue
         }
-        strings.write_string(sb, " {\n")
 
-        // The API field name matches the original name.
-        field_name := original_name
-        call_args := strings.join(param_names, ", ", context.temp_allocator)
+        // Find the colon that separates name from type (not part of :=).
+        colon := -1
+        for ci := 0; ci < len(part); ci += 1 {
+            if part[ci] == ':' {
+                if ci + 1 < len(part) && part[ci+1] == '=' do continue // skip :=
+                colon = ci
+                break
+            }
+        }
+        if colon >= 0 {
+            // This part has a colon — it's the type-bearing part of a group.
+            type_part := strings.trim_space(part[colon+1:])
+            name_part := strings.trim_space(part[:colon])
 
-        if len(ps.returns) > 0 {
-            fmt.sbprintf(sb, "    return _api.%s(%s)\n", field_name, call_args)
+            // Emit this part as-is.
+            append(&result, fmt.tprintf("%s: %s", name_part, type_part))
+
+            // Look backwards for shorthand names (parts without type-colons).
+            j := i - 1
+            for j >= 0 {
+                prev := strings.trim_space(parts[j])
+                if len(prev) == 0 {
+                    j -= 1
+                    continue
+                }
+                // Check if this part has a type-colon (not :=).
+                prev_has_colon := false
+                for ci := 0; ci < len(prev); ci += 1 {
+                    if prev[ci] == ':' {
+                        if ci + 1 < len(prev) && prev[ci+1] == '=' do continue
+                        prev_has_colon = true
+                        break
+                    }
+                }
+                if prev_has_colon {
+                    break // This part has its own type — stop.
+                }
+                // Shorthand name — expand with the base type (no default).
+                base_type := type_part
+                eq := strings.index(base_type, "=")
+                if eq >= 0 {
+                    base_type = strings.trim_space(base_type[:eq])
+                }
+                append(&result, fmt.tprintf("%s: %s", prev, base_type))
+                j -= 1
+            }
+            i = j
         } else {
-            fmt.sbprintf(sb, "    _api.%s(%s)\n", field_name, call_args)
+            // Standalone part without colon — keep as-is.
+            append(&result, part)
+            i -= 1
         }
-        strings.write_string(sb, "}\n\n")
     }
+
+    // Reverse result (we built it backwards).
+    for left, right := 0, len(result)-1; left < right; left, right = left+1, right-1 {
+        result[left], result[right] = result[right], result[left]
+    }
+
+    return strings.join(result[:], ", ", context.temp_allocator)
 }
 
 // Convert slice params back to variadic: "[]string" -> "..string", "[]any" -> "..any"
