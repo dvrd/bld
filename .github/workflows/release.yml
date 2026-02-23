@@ -17,10 +17,6 @@ jobs:
             arch: arm64
             dylib: libbld.dylib
             artifact: bld-darwin-arm64
-          - os: macos-13
-            arch: amd64
-            dylib: libbld.dylib
-            artifact: bld-darwin-amd64
           - os: ubuntu-latest
             arch: amd64
             dylib: libbld.so
