@@ -176,6 +176,10 @@ go_rebuild_urself :: proc(source_path: string, extra_sources: ..string) {
     process, start_err := os.process_start(os.Process_Desc{command = exec_command})
     if start_err != nil {
         log_error("Could not re-execute '%s': %v", binary_path, start_err)
+        // Try to restore the old binary so the user isn't left without one.
+        if file_exists(old_path) {
+            rename_file(old_path, binary_path)
+        }
         runtime.exit(1)
     }
 

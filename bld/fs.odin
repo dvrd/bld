@@ -72,33 +72,44 @@ copy_file :: proc(src_path, dst_path: string) -> bool {
         log_error("Could not open '%s' for writing: %v", dst_path, dst_err)
         return false
     }
-    defer os.close(dst)
+    // No defer — we manage dst close explicitly to handle partial-write cleanup.
 
     COPY_BUF_SIZE :: 64 * 1024 // 64 KB
     buf: [COPY_BUF_SIZE]u8
 
+    copy_ok := true
     for {
         n, read_err := os.read(src, buf[:])
         if n > 0 {
             _, write_err := os.write(dst, buf[:n])
             if write_err != nil {
                 log_error("Could not write to '%s': %v", dst_path, write_err)
-                return false
+                copy_ok = false
+                break
             }
         }
         if read_err != nil {
             if read_err == .EOF do break
             log_error("Could not read from '%s': %v", src_path, read_err)
-            return false
+            copy_ok = false
+            break
         }
         if n == 0 do break
     }
 
-    // Apply source file's permission bits to the destination.
+    os.close(dst)
+
+    if !copy_ok {
+        // Remove partial destination file to avoid leaving corrupt data on disk.
+        os.remove(dst_path)
+        return false
+    }
+
+    // Apply source file's permission bits to the destination (best effort —
+    // some filesystems like FAT/exFAT don't support POSIX permissions).
     chmod_err := os.chmod(dst_path, src_info.mode)
     if chmod_err != nil {
-        log_error("Could not set permissions on '%s': %v", dst_path, chmod_err)
-        return false
+        log_warn("Could not set permissions on '%s': %v (content copied successfully)", dst_path, chmod_err)
     }
 
     return true

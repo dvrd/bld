@@ -33,16 +33,18 @@ Walk_Opt :: struct {
 // Recursively walk a directory tree.
 @(export, link_name="bld_walk_dir")
 walk_dir :: proc(root: string, callback: Walk_Proc, opt: Walk_Opt = {}) -> bool {
-    return _walk_dir_impl(root, callback, opt, 0)
+    ok, _ := _walk_dir_impl(root, callback, opt, 0)
+    return ok
 }
 
+// Returns (ok, stopped): ok=false means error, stopped=true means .Stop was returned.
 @(private = "file")
 _walk_dir_impl :: proc(
     dir_path: string,
     callback: Walk_Proc,
     opt:      Walk_Opt,
     level:    int,
-) -> bool {
+) -> (ok: bool, stopped: bool) {
     // Temp guard: saves temp allocator position on entry, restores on any
     // return path. Prevents unbounded accumulation in deep recursive trees.
     runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
@@ -50,14 +52,14 @@ _walk_dir_impl :: proc(
     f, open_err := os.open(dir_path)
     if open_err != nil {
         log_error("Could not open directory '%s': %v", dir_path, open_err)
-        return false
+        return false, false
     }
     defer os.close(f)
 
     infos, read_err := os.read_all_directory(f, context.temp_allocator)
     if read_err != nil {
         log_error("Could not read directory '%s': %v", dir_path, read_err)
-        return false
+        return false, false
     }
     defer os.file_info_slice_delete(infos, context.temp_allocator)
 
@@ -84,27 +86,27 @@ _walk_dir_impl :: proc(
         if !opt.post_order {
             action := callback(entry, opt.user_data)
             switch action {
-            case .Stop:     return true  // Stop requested, but not an error.
-            case .Skip:     continue     // Skip this directory.
+            case .Stop:     return true, true   // Stop requested — propagate up.
+            case .Skip:     continue            // Skip this directory.
             case .Continue: // Fall through.
             }
         }
 
         if ft == .Directory {
-            if !_walk_dir_impl(child_path, callback, opt, level + 1) {
-                return false
-            }
+            child_ok, child_stopped := _walk_dir_impl(child_path, callback, opt, level + 1)
+            if !child_ok do return false, false
+            if child_stopped do return true, true  // Propagate stop to parent.
         }
 
         if opt.post_order {
             action := callback(entry, opt.user_data)
             switch action {
-            case .Stop:     return true
+            case .Stop:     return true, true
             case .Skip:     continue
             case .Continue: // Fall through.
             }
         }
     }
 
-    return true
+    return true, false
 }

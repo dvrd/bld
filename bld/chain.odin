@@ -130,6 +130,11 @@ chain_end :: proc(chain: ^Chain, opt: Chain_End_Opt = {}) -> bool {
         f, err := os.open(opt.stdout_path, {.Write, .Create, .Trunc})
         if err != nil {
             log_error("Could not open stdout file '%s': %v", opt.stdout_path, err)
+            // Clean up pipe and intermediate processes to avoid leaks/orphans.
+            if chain.pipe_read != nil do os.close(chain.pipe_read)
+            chain.pipe_read = nil
+            for p in chain.processes { _, _ = os.process_wait(p) }
+            clear(&chain.processes)
             return false
         }
         stdout_file = f
@@ -140,6 +145,11 @@ chain_end :: proc(chain: ^Chain, opt: Chain_End_Opt = {}) -> bool {
         f, err := os.open(opt.stderr_path, {.Write, .Create, .Trunc})
         if err != nil {
             log_error("Could not open stderr file '%s': %v", opt.stderr_path, err)
+            // Clean up pipe and intermediate processes to avoid leaks/orphans.
+            if chain.pipe_read != nil do os.close(chain.pipe_read)
+            chain.pipe_read = nil
+            for p in chain.processes { _, _ = os.process_wait(p) }
+            clear(&chain.processes)
             return false
         }
         stderr_file = f
