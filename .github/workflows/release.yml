@@ -47,7 +47,9 @@ jobs:
         run: odin run codegen
 
       - name: Build test suite
-        run: odin build example/build.odin -file -out:target/test_build
+        run: |
+          mkdir -p target
+          odin build example/build.odin -file -out:target/test_build
 
       - name: Run tests
         run: ./target/test_build
