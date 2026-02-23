@@ -1,3 +1,5 @@
 target/
 thoughts/
 .logs/
+*.dylib
+*.so
