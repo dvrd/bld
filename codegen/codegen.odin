@@ -138,6 +138,30 @@ main :: proc() {
         os.exit(1)
     }
 
+    // Validate TYPE_ORDER against parsed types — warn on mismatches.
+    {
+        // Check for parsed types missing from TYPE_ORDER.
+        for td in type_defs {
+            found := false
+            for to in TYPE_ORDER {
+                if td.name == to { found = true; break }
+            }
+            if !found {
+                fmt.eprintfln("Warning: parsed type '%s' is not in TYPE_ORDER — it will sort last", td.name)
+            }
+        }
+        // Check for TYPE_ORDER entries not found in parsed types.
+        for to in TYPE_ORDER {
+            found := false
+            for td in type_defs {
+                if td.name == to { found = true; break }
+            }
+            if !found {
+                fmt.eprintfln("Warning: TYPE_ORDER entry '%s' was not found in parsed types", to)
+            }
+        }
+    }
+
     // Sort type_defs according to TYPE_ORDER.
     slice.sort_by(type_defs[:], proc(a, b: Type_Def) -> bool {
         return _type_order_index(a.name) < _type_order_index(b.name)
@@ -281,14 +305,22 @@ main :: proc() {
     // Load global variable pointers (fail-fast on missing symbols).
     strings.write_string(&sb, "    // Load global variable pointers.\n")
     for gv in global_vars {
-        // Use short prefix for var names to match handwritten style.
+        // Use deterministic short names to match handwritten style:
+        // minimal_log_level -> ml, echo_actions -> ea.
+        // For unknown globals, use initials of underscore-separated words to avoid collision.
         short: string
         if gv.name == "minimal_log_level" {
             short = "ml"
         } else if gv.name == "echo_actions" {
             short = "ea"
         } else {
-            short = fmt.tprintf("%c%c", gv.name[0], gv.name[1])
+            // Build initials from underscore-separated words: "foo_bar_baz" -> "fbb".
+            words := strings.split(gv.name, "_", context.temp_allocator)
+            initials := make([dynamic]u8, context.temp_allocator)
+            for w in words {
+                if len(w) > 0 do append(&initials, w[0])
+            }
+            short = strings.clone_from_bytes(initials[:], context.temp_allocator)
         }
         strings.write_string(&sb, fmt.tprintf("    %s_ptr, %s_ok := dynlib.symbol_address(_api.__handle, \"%s\")\n",
             short, short, gv.link_name))
@@ -690,9 +722,16 @@ _collect_type_def :: proc(lines: []string, start: int) -> Type_Def {
         }
         strings.write_string(&sb, "\n")
 
+        // Count braces, but skip any inside string literals.
+        in_string := false
+        prev_ch: rune = 0
         for ch in l {
-            if ch == '{' do depth += 1
-            if ch == '}' do depth -= 1
+            if ch == '"' && prev_ch != '\\' do in_string = !in_string
+            if !in_string {
+                if ch == '{' do depth += 1
+                if ch == '}' do depth -= 1
+            }
+            prev_ch = ch
         }
         if depth <= 0 && i > start do break
         if depth <= 0 && strings.contains(l, "}") do break
@@ -939,20 +978,34 @@ _expand_shorthand_params :: proc(params: string) -> string {
 }
 
 // Convert slice params back to variadic: "[]string" -> "..string", "[]any" -> "..any"
-// Only converts the LAST slice parameter.
+// Only converts the LAST slice parameter to avoid incorrectly making earlier params variadic.
 @(private = "file")
 _make_variadic_params :: proc(params: string) -> string {
-    // Find the last occurrence of "[]string" or "[]any" and replace with ".." version.
-    result := strings.clone(params, context.temp_allocator)
+    // Split into individual params, find the last one that's a slice type, replace only that.
+    parts := strings.split(params, ",", context.temp_allocator)
+    if len(parts) == 0 do return params
 
-    // Try []any first (log procs).
-    if strings.contains(result, "[]any") {
-        result, _ = strings.replace(result, "[]any", "..any", -1, context.temp_allocator)
-    } else if strings.contains(result, "[]string") {
-        result, _ = strings.replace(result, "[]string", "..string", -1, context.temp_allocator)
+    // Walk backwards to find the last slice param.
+    last_slice := -1
+    for i := len(parts) - 1; i >= 0; i -= 1 {
+        trimmed := strings.trim_space(parts[i])
+        if strings.contains(trimmed, "[]any") || strings.contains(trimmed, "[]string") {
+            last_slice = i
+            break
+        }
     }
 
-    return result
+    if last_slice < 0 do return params // No slice params found.
+
+    // Replace only in the last slice param.
+    p := parts[last_slice]
+    if strings.contains(p, "[]any") {
+        parts[last_slice], _ = strings.replace(p, "[]any", "..any", 1, context.temp_allocator)
+    } else {
+        parts[last_slice], _ = strings.replace(p, "[]string", "..string", 1, context.temp_allocator)
+    }
+
+    return strings.join(parts[:], ",", context.temp_allocator)
 }
 
 // Strip default values from a params string for use in proc pointer type fields.
@@ -975,10 +1028,16 @@ _strip_defaults :: proc(params: string) -> string {
 
         walrus := strings.index(trimmed, ":=")
         if walrus >= 0 {
-            // "name := context.allocator" or "name := context.temp_allocator"
-            // The type is always mem.Allocator for these cases.
+            // Infer the type from the default value.
             name := strings.trim_space(trimmed[:walrus])
-            append(&result_parts, fmt.tprintf("%s: mem.Allocator", name))
+            value := strings.trim_space(trimmed[walrus+2:])
+            if strings.contains(value, "allocator") {
+                append(&result_parts, fmt.tprintf("%s: mem.Allocator", name))
+            } else {
+                // Unknown inferred type — emit a warning and keep the raw text.
+                fmt.eprintfln("Warning: _strip_defaults cannot infer type for '%s := %s'", name, value)
+                append(&result_parts, trimmed)
+            }
         } else {
             // Check for "name: Type = value" pattern.
             eq := strings.index(trimmed, " = ")
