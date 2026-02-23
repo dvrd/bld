@@ -414,7 +414,10 @@ main :: proc() {
     output = strings.concatenate({output, "\n"}, context.temp_allocator)
 
     // Ensure dist/lib/ exists.
-    os.mkdir_all("dist/lib")
+    if mkdir_err := os.mkdir_all("dist/lib"); mkdir_err != nil && mkdir_err != .Exist {
+        fmt.eprintln("Could not create dist/lib/ directory:", mkdir_err)
+        os.exit(1)
+    }
 
     err := os.write_entire_file("dist/lib/bld.odin", output)
     if err != nil {
@@ -759,9 +762,15 @@ _skip_block :: proc(lines: []string, start: int) -> int {
 
     depth := 0
     for i := start; i < len(lines); i += 1 {
+        in_string := false
+        prev_ch: rune = 0
         for ch in lines[i] {
-            if ch == '{' do depth += 1
-            if ch == '}' do depth -= 1
+            if ch == '"' && prev_ch != '\\' do in_string = !in_string
+            if !in_string {
+                if ch == '{' do depth += 1
+                if ch == '}' do depth -= 1
+            }
+            prev_ch = ch
         }
         if depth <= 0 do return i + 1
     }
@@ -786,12 +795,18 @@ _collect_proc_signature :: proc(lines: []string, start: int) -> string {
             strings.write_string(&sb, trimmed)
         }
 
+        in_string := false
+        prev_ch: rune = 0
         for ch in line {
-            if ch == '(' {
-                paren_depth += 1
-                found_open = true
+            if ch == '"' && prev_ch != '\\' do in_string = !in_string
+            if !in_string {
+                if ch == '(' {
+                    paren_depth += 1
+                    found_open = true
+                }
+                if ch == ')' do paren_depth -= 1
             }
-            if ch == ')' do paren_depth -= 1
+            prev_ch = ch
         }
 
         // We're done when we've closed all parens and found the opening brace.
@@ -843,13 +858,31 @@ _parse_proc_sig :: proc(sig: string, link_name: string, source_file: string) -> 
     // Check for variadic.
     is_variadic := strings.contains(params, "..")
 
-    // Extract return type: everything between ") -> " and " {".
+    // Extract return type: everything between ") -> " and the body-opening "{".
+    // Must be paren-depth-aware: a proc-type return like "-> proc(a: int) -> bool"
+    // contains parens, and the "{" we want is at paren depth 0 after the return type.
     returns := ""
     arrow := strings.index(sig[close:], "->")
     if arrow >= 0 {
         ret_start := close + arrow + 2
-        // Find the opening brace.
-        brace := strings.index(sig[ret_start:], "{")
+        // Find the opening brace at paren depth 0 (string-aware).
+        paren_d := 0
+        in_str := false
+        prev_c: u8 = 0
+        brace := -1
+        for bi := 0; bi < len(sig[ret_start:]); bi += 1 {
+            c := sig[ret_start + bi]
+            if c == '"' && prev_c != '\\' do in_str = !in_str
+            if !in_str {
+                if c == '(' do paren_d += 1
+                if c == ')' do paren_d -= 1
+                if c == '{' && paren_d == 0 {
+                    brace = bi
+                    break
+                }
+            }
+            prev_c = c
+        }
         if brace >= 0 {
             returns = strings.trim_space(sig[ret_start:][:brace])
         } else {
@@ -1034,9 +1067,9 @@ _strip_defaults :: proc(params: string) -> string {
             if strings.contains(value, "allocator") {
                 append(&result_parts, fmt.tprintf("%s: mem.Allocator", name))
             } else {
-                // Unknown inferred type — emit a warning and keep the raw text.
-                fmt.eprintfln("Warning: _strip_defaults cannot infer type for '%s := %s'", name, value)
-                append(&result_parts, trimmed)
+                // Unknown inferred type — cannot produce valid proc pointer type syntax.
+                fmt.eprintfln("Error: _strip_defaults cannot infer type for '%s := %s' — add a case to handle this default", name, value)
+                os.exit(1)
             }
         } else {
             // Check for "name: Type = value" pattern.
