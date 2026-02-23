@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            dylib: libbld.dylib
+          - os: ubuntu-latest
+            dylib: libbld.so
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Odin
+        uses: laytan/setup-odin@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Odin version
+        run: odin version
+
+      - name: Build dylib
+        run: odin build bld -build-mode:dll -out:dist/lib/${{ matrix.dylib }}
+
+      - name: Run codegen
+        run: odin run codegen
+
+      - name: Verify codegen output is up to date
+        run: |
+          git diff --exit-code dist/lib/bld.odin || {
+            echo "::error::Codegen output is stale. Run 'odin run codegen' and commit the result."
+            exit 1
+          }
+
+      - name: Build test suite
+        run: odin build example/build.odin -file -out:target/test_build
+
+      - name: Run tests
+        run: ./target/test_build

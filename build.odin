@@ -8,7 +8,15 @@ import bld "bld"
 
 import "core:fmt"
 
-DYLIB_PATH :: "dist/lib/libbld.dylib"
+DYLIB_PATH :: "dist/lib/" + DYLIB_NAME
+
+when ODIN_OS == .Darwin {
+    DYLIB_NAME :: "libbld.dylib"
+} else when ODIN_OS == .Linux {
+    DYLIB_NAME :: "libbld.so"
+} else {
+    #panic("Unsupported OS")
+}
 
 main :: proc() {
     bld.go_rebuild_urself("build.odin", "bld")
