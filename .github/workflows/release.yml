@@ -31,9 +31,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Odin
+      - name: Install Odin (nightly)
         uses: laytan/setup-odin@v2
         with:
+          release: nightly
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Odin version
