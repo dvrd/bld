@@ -47,9 +47,18 @@ mkdir_all :: proc(path: string) -> bool {
 }
 
 // Copy a single file from src to dst using streaming (constant memory).
+// Preserves the source file's permission bits on the destination.
 @(export, link_name="bld_copy_file")
 copy_file :: proc(src_path, dst_path: string) -> bool {
     if echo_actions do log_info("copying %s -> %s", src_path, dst_path)
+
+    // Stat source to capture permission bits before copying.
+    src_info, stat_err := os.stat(src_path, context.temp_allocator)
+    if stat_err != nil {
+        log_error("Could not stat '%s': %v", src_path, stat_err)
+        return false
+    }
+    defer os.file_info_delete(src_info, context.temp_allocator)
 
     src, src_err := os.open(src_path, {.Read})
     if src_err != nil {
@@ -83,6 +92,13 @@ copy_file :: proc(src_path, dst_path: string) -> bool {
             return false
         }
         if n == 0 do break
+    }
+
+    // Apply source file's permission bits to the destination.
+    chmod_err := os.chmod(dst_path, src_info.mode)
+    if chmod_err != nil {
+        log_error("Could not set permissions on '%s': %v", dst_path, chmod_err)
+        return false
     }
 
     return true

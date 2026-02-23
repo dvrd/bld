@@ -194,14 +194,17 @@ bld.file_exists("out/myapp")
 Check if output is older than inputs (like `make` dependency tracking):
 
 ```odin
-switch bld.needs_rebuild1("out/myapp", "src/main.odin") {
-case  1: bld.log_info("Rebuild needed")
-case  0: bld.log_info("Up to date")
-case -1: bld.log_error("Error checking")
+rebuild, ok := bld.needs_rebuild1("out/myapp", "src/main.odin")
+if !ok {
+    bld.log_error("Error checking")
+} else if rebuild {
+    bld.log_info("Rebuild needed")
+} else {
+    bld.log_info("Up to date")
 }
 
 // Multiple inputs:
-bld.needs_rebuild("out/myapp", {"src/main.odin", "src/game.odin", "src/render.odin"})
+rebuild, ok = bld.needs_rebuild("out/myapp", {"src/main.odin", "src/game.odin", "src/render.odin"})
 ```
 
 ### Go Rebuild Urself

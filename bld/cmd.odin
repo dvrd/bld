@@ -141,6 +141,7 @@ cmd_run :: proc(cmd: ^Cmd, opt: Cmd_Run_Opt = {}) -> bool {
         f, err := os.open(opt.stdout_path, {.Write, .Create, .Trunc})
         if err != nil {
             log_error("Could not open stdout file '%s': %v", opt.stdout_path, err)
+            _close_redirect_files(stdin_file, nil, nil)
             return false
         }
         stdout_file = f
@@ -150,6 +151,7 @@ cmd_run :: proc(cmd: ^Cmd, opt: Cmd_Run_Opt = {}) -> bool {
         f, err := os.open(opt.stderr_path, {.Write, .Create, .Trunc})
         if err != nil {
             log_error("Could not open stderr file '%s': %v", opt.stderr_path, err)
+            _close_redirect_files(stdin_file, stdout_file, nil)
             return false
         }
         stderr_file = f

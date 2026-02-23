@@ -40,7 +40,7 @@ needs_rebuild :: proc(output_path: string, input_paths: []string) -> (rebuild: b
                 err:    bool,
             }
             state := Newest_State{}
-            walk_dir(input_path, proc(entry: Walk_Entry, user_data: rawptr) -> Walk_Action {
+            walk_ok := walk_dir(input_path, proc(entry: Walk_Entry, user_data: rawptr) -> Walk_Action {
                 s := cast(^Newest_State)user_data
                 if entry.type != .Regular do return .Continue
                 // Check for .odin extension.
@@ -68,7 +68,7 @@ needs_rebuild :: proc(output_path: string, input_paths: []string) -> (rebuild: b
                 return .Continue
             }, {user_data = &state})
 
-            if state.err {
+            if !walk_ok || state.err {
                 log_error("Could not stat files in directory '%s'", input_path)
                 return false, false
             }
@@ -141,7 +141,12 @@ go_rebuild_urself :: proc(source_path: string, extra_sources: ..string) {
 
     // Rebuild using odin build.
     rebuild_cmd := cmd_create(context.temp_allocator)
-    cmd_append(&rebuild_cmd, "odin", "build", source_path, "-o:speed")
+    cmd_append(&rebuild_cmd, "odin", "build", source_path)
+    // Add -file flag when source_path points to a single .odin file.
+    if strings.has_suffix(source_path, ".odin") {
+        cmd_append(&rebuild_cmd, "-file")
+    }
+    cmd_append(&rebuild_cmd, "-o:speed")
     cmd_append(&rebuild_cmd, fmt.tprintf("-out:%s", binary_path))
 
     if !cmd_run(&rebuild_cmd, {dont_reset = true}) {
