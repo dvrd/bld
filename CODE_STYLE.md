@@ -70,7 +70,7 @@ mkdir_if_not_exists :: proc(path: string) -> bool {
 - Error messages start with `"Could not {verb} '{path}': %v"`
 - For data-returning procs, use `(data, ok: bool)` tuple pattern
 - **Never panic** — all errors are logged and propagated as `false`
-- Tri-state: `needs_rebuild` returns `int` (-1 error / 0 no / 1 yes)
+- `needs_rebuild` returns `(rebuild: bool, ok: bool)` — consistent with the tuple pattern
 
 ### Allocator Passing
 

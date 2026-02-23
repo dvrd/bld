@@ -215,16 +215,16 @@ main :: proc() {
     bld.log_info("--- Test: needs_rebuild ---")
     {
         // Binary should be newer than source (we just built it).
-        result := bld.needs_rebuild1("target/testapp", "example/src/main.odin")
-        check_result(&pc, "needs_rebuild1 returns 0 (up to date)", result == 0)
+        rebuild1, ok1 := bld.needs_rebuild1("target/testapp", "example/src/main.odin")
+        check_result(&pc, "needs_rebuild1 up to date", !rebuild1 && ok1)
 
         // Non-existent output should need rebuild.
-        result2 := bld.needs_rebuild1("target/nonexistent", "example/src/main.odin")
-        check_result(&pc, "needs_rebuild1 returns 1 (missing output)", result2 == 1)
+        rebuild2, ok2 := bld.needs_rebuild1("target/nonexistent", "example/src/main.odin")
+        check_result(&pc, "needs_rebuild1 missing output", rebuild2 && ok2)
 
         // Non-existent input should return error.
-        result3 := bld.needs_rebuild1("target/testapp", "nonexistent.odin")
-        check_result(&pc, "needs_rebuild1 returns -1 (missing input)", result3 == -1)
+        rebuild3, ok3 := bld.needs_rebuild1("target/testapp", "nonexistent.odin")
+        check_result(&pc, "needs_rebuild1 missing input", !rebuild3 && !ok3)
     }
 
     // =========================================================

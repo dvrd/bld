@@ -65,6 +65,16 @@ procs_flush :: proc(procs: ^Procs) -> bool {
     return ok
 }
 
+// Get the number of tracked processes.
+_procs_len :: proc(procs: Procs) -> int {
+    return len(procs.items)
+}
+
+// Append a tracked process to the list.
+_procs_append :: proc(procs: ^Procs, tp: Tracked_Process) {
+    append(&procs.items, tp)
+}
+
 // _SC_NPROCESSORS_ONLN is a non-standard extension not in the posix.SC enum.
 // We define the platform-specific constant here.
 when ODIN_OS == .Darwin {

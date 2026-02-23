@@ -309,8 +309,8 @@ _Bld_API :: struct {
     debug_config:     proc(package_path: string, out: string) -> Build_Config,
 
     // From rebuild.odin (go_rebuild_urself companion takes []string):
-    needs_rebuild:     proc(output_path: string, input_paths: []string) -> int,
-    needs_rebuild1:    proc(output_path: string, input_path: string) -> int,
+    needs_rebuild:     proc(output_path: string, input_paths: []string) -> (rebuild: bool, ok: bool),
+    needs_rebuild1:    proc(output_path: string, input_path: string) -> (rebuild: bool, ok: bool),
     go_rebuild_urself: proc(source_path: string, extra_sources: []string),
 
     // From time.odin:
@@ -535,11 +535,11 @@ debug_config :: proc(package_path: string, out: string) -> Build_Config {
 
 // -- Rebuild --
 
-needs_rebuild :: proc(output_path: string, input_paths: []string) -> int {
+needs_rebuild :: proc(output_path: string, input_paths: []string) -> (rebuild: bool, ok: bool) {
     return _api.needs_rebuild(output_path, input_paths)
 }
 
-needs_rebuild1 :: proc(output_path: string, input_path: string) -> int {
+needs_rebuild1 :: proc(output_path: string, input_path: string) -> (rebuild: bool, ok: bool) {
     return _api.needs_rebuild1(output_path, input_path)
 }
 

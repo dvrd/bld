@@ -66,10 +66,7 @@ chain_cmd :: proc(chain: ^Chain, cmd: ^Cmd, opt: Chain_Cmd_Opt = {}) -> bool {
             return false
         }
 
-        command := make([]string, len(chain.pending.items), context.temp_allocator)
-        for arg, i in chain.pending.items {
-            command[i] = arg
-        }
+        command := _cmd_to_slice(chain.pending)
 
         desc := os.Process_Desc{
             command = command,
@@ -121,10 +118,7 @@ chain_end :: proc(chain: ^Chain, opt: Chain_End_Opt = {}) -> bool {
         return true
     }
 
-    command := make([]string, len(chain.pending.items), context.temp_allocator)
-    for arg, i in chain.pending.items {
-        command[i] = arg
-    }
+    command := _cmd_to_slice(chain.pending)
 
     stdout_file: ^os.File = nil
     stderr_file: ^os.File = nil
@@ -169,7 +163,7 @@ chain_end :: proc(chain: ^Chain, opt: Chain_End_Opt = {}) -> bool {
     }
 
     if opt.async != nil {
-        append(&opt.async.items, Tracked_Process{process = process})
+        _procs_append(opt.async, Tracked_Process{process = process})
         // Still need to wait on intermediate processes.
         for p in chain.processes {
             _, _ = os.process_wait(p)

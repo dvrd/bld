@@ -169,7 +169,7 @@ cmd_run :: proc(cmd: ^Cmd, opt: Cmd_Run_Opt = {}) -> bool {
         max_p := opt.max_procs > 0 ? opt.max_procs : nprocs() + 1
 
         // Flush if we're at capacity.
-        if len(opt.async.items) >= max_p {
+        if _procs_len(opt.async^) >= max_p {
             if !procs_flush(opt.async) {
                 if !opt.dont_reset do cmd_reset(cmd)
                 return false
@@ -183,7 +183,7 @@ cmd_run :: proc(cmd: ^Cmd, opt: Cmd_Run_Opt = {}) -> bool {
             if !opt.dont_reset do cmd_reset(cmd)
             return false
         }
-        append(&opt.async.items, Tracked_Process{
+        _procs_append(opt.async, Tracked_Process{
             process     = process,
             stdin_file  = stdin_file,
             stdout_file = stdout_file,
@@ -268,6 +268,15 @@ cmd_run_capture :: proc(
 
     cmd_reset(cmd)
     return stdout, true
+}
+
+// Copy a command's items to a plain slice (for os.Process_Desc).
+_cmd_to_slice :: proc(cmd: Cmd, allocator := context.temp_allocator) -> []string {
+    result := make([]string, len(cmd.items), allocator)
+    for arg, i in cmd.items {
+        result[i] = arg
+    }
+    return result
 }
 
 // Close redirect files after a process finishes.

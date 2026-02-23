@@ -132,6 +132,12 @@ main :: proc() {
 
     fmt.printfln("Found %d types, %d procs, %d globals", len(type_defs), len(proc_sigs), len(global_vars))
 
+    // Fail fast: parsing found nothing useful — likely a broken source tree.
+    if len(type_defs) == 0 || len(proc_sigs) == 0 || len(global_vars) == 0 {
+        fmt.eprintln("Error: parsed zero types, procs, or globals — aborting codegen")
+        os.exit(1)
+    }
+
     // Sort type_defs according to TYPE_ORDER.
     slice.sort_by(type_defs[:], proc(a, b: Type_Def) -> bool {
         return _type_order_index(a.name) < _type_order_index(b.name)

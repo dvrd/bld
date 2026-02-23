@@ -11,14 +11,14 @@ import "core:strings"
 import "core:time"
 
 // Check if an output file needs rebuilding based on input file modification times.
-// Returns:  1 = needs rebuild, 0 = up to date, -1 = error.
+// Returns (rebuild, ok): rebuild=true means output is stale, ok=false means error.
 // When an input path is a directory, walks it and checks individual .odin file mtimes.
 @(export, link_name="bld_needs_rebuild")
-needs_rebuild :: proc(output_path: string, input_paths: []string) -> int {
+needs_rebuild :: proc(output_path: string, input_paths: []string) -> (rebuild: bool, ok: bool) {
     output_info, out_err := os.stat(output_path, context.temp_allocator)
     if out_err != nil {
         // Output doesn't exist, needs rebuild.
-        return 1
+        return true, true
     }
     defer os.file_info_delete(output_info, context.temp_allocator)
 
@@ -28,7 +28,7 @@ needs_rebuild :: proc(output_path: string, input_paths: []string) -> int {
         input_info, in_err := os.stat(input_path, context.temp_allocator)
         if in_err != nil {
             log_error("Could not stat input '%s': %v", input_path, in_err)
-            return -1
+            return false, false
         }
         defer os.file_info_delete(input_info, context.temp_allocator)
 
@@ -70,24 +70,24 @@ needs_rebuild :: proc(output_path: string, input_paths: []string) -> int {
 
             if state.err {
                 log_error("Could not stat files in directory '%s'", input_path)
-                return -1
+                return false, false
             }
             if state.found && time.diff(output_mtime, state.newest) > 0 {
-                return 1
+                return true, true
             }
         } else {
             if time.diff(output_mtime, input_info.modification_time) > 0 {
-                return 1
+                return true, true
             }
         }
     }
 
-    return 0
+    return false, true
 }
 
 // Convenience: check if output needs rebuild against a single input.
 @(export, link_name="bld_needs_rebuild1")
-needs_rebuild1 :: proc(output_path, input_path: string) -> int {
+needs_rebuild1 :: proc(output_path, input_path: string) -> (rebuild: bool, ok: bool) {
     return needs_rebuild(output_path, {input_path})
 }
 
@@ -123,11 +123,11 @@ go_rebuild_urself :: proc(source_path: string, extra_sources: ..string) {
     }
 
     // Check if rebuild is needed.
-    rebuild := needs_rebuild(binary_path, all_sources[:])
-    if rebuild < 0 {
+    needs_it, check_ok := needs_rebuild(binary_path, all_sources[:])
+    if !check_ok {
         runtime.exit(1)
     }
-    if rebuild == 0 {
+    if !needs_it {
         return // Up to date, continue with the current binary.
     }
 
