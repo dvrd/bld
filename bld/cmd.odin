@@ -263,9 +263,9 @@ cmd_run_capture :: proc(
 
     if !state.success {
         log_error("Command '%s' exited with code %d", cmd.items[0], state.exit_code)
-        // Still return stdout so the caller can inspect it if they want.
+        delete(stdout, allocator)
         cmd_reset(cmd)
-        return stdout, false
+        return nil, false
     }
 
     cmd_reset(cmd)

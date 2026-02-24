@@ -63,9 +63,12 @@ chain_cmd :: proc(chain: ^Chain, cmd: ^Cmd, opt: Chain_Cmd_Opt = {}) -> bool {
         r, w, pipe_err := os.pipe()
         if pipe_err != nil {
             log_error("Could not create pipe: %v", pipe_err)
-            // Close the read end from the previous pipe to avoid leaking it.
             if chain.pipe_read != nil do os.close(chain.pipe_read)
             chain.pipe_read = nil
+            // Wait on already-started intermediate processes to avoid orphans.
+            for p in chain.processes { _, _ = os.process_wait(p) }
+            clear(&chain.processes)
+            chain.has_pending = false
             return false
         }
 
@@ -89,6 +92,10 @@ chain_cmd :: proc(chain: ^Chain, cmd: ^Cmd, opt: Chain_Cmd_Opt = {}) -> bool {
         if err != nil {
             log_error("Could not start process: %v", err)
             os.close(r)
+            // Wait on already-started intermediate processes to avoid orphans.
+            for p in chain.processes { _, _ = os.process_wait(p) }
+            clear(&chain.processes)
+            chain.has_pending = false
             return false
         }
 

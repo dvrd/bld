@@ -901,13 +901,40 @@ _parse_proc_sig :: proc(sig: string, link_name: string, source_file: string) -> 
     }
 }
 
+// Split a params string on commas at paren/bracket depth 0 only.
+// Handles nested proc types like "callback: proc(a: int, b: string) -> bool".
+@(private = "file")
+_split_params :: proc(params: string) -> []string {
+    if len(strings.trim_space(params)) == 0 do return {}
+
+    parts := make([dynamic]string, context.temp_allocator)
+    depth := 0
+    start := 0
+
+    for i := 0; i < len(params); i += 1 {
+        ch := params[i]
+        if ch == '(' || ch == '[' do depth += 1
+        if ch == ')' || ch == ']' do depth -= 1
+        if ch == ',' && depth == 0 {
+            append(&parts, params[start:i])
+            start = i + 1
+        }
+    }
+    // Last segment.
+    if start <= len(params) {
+        append(&parts, params[start:])
+    }
+
+    return parts[:]
+}
+
 // Extract parameter names from a params string for forwarding calls.
 // "config: Build_Config, args: []string" -> ["config", "args"]
 @(private = "file")
 _extract_param_names :: proc(params: string) -> []string {
     if len(strings.trim_space(params)) == 0 do return {}
 
-    parts := strings.split(params, ",", context.temp_allocator)
+    parts := _split_params(params)
     names := make([dynamic]string, context.temp_allocator)
 
     for part in parts {
@@ -935,7 +962,7 @@ _extract_param_names :: proc(params: string) -> []string {
 _expand_shorthand_params :: proc(params: string) -> string {
     if len(strings.trim_space(params)) == 0 do return params
 
-    parts := strings.split(params, ",", context.temp_allocator)
+    parts := _split_params(params)
     result := make([dynamic]string, context.temp_allocator)
 
     // Walk backwards: find the type for each shorthand group.
@@ -1015,7 +1042,7 @@ _expand_shorthand_params :: proc(params: string) -> string {
 @(private = "file")
 _make_variadic_params :: proc(params: string) -> string {
     // Split into individual params, find the last one that's a slice type, replace only that.
-    parts := strings.split(params, ",", context.temp_allocator)
+    parts := _split_params(params)
     if len(parts) == 0 do return params
 
     // Walk backwards to find the last slice param.
@@ -1052,7 +1079,7 @@ _make_variadic_params :: proc(params: string) -> string {
 _strip_defaults :: proc(params: string) -> string {
     if len(strings.trim_space(params)) == 0 do return params
 
-    parts := strings.split(params, ",", context.temp_allocator)
+    parts := _split_params(params)
     result_parts := make([dynamic]string, context.temp_allocator)
 
     for part in parts {
@@ -1066,10 +1093,19 @@ _strip_defaults :: proc(params: string) -> string {
             value := strings.trim_space(trimmed[walrus+2:])
             if strings.contains(value, "allocator") {
                 append(&result_parts, fmt.tprintf("%s: mem.Allocator", name))
+            } else if value == "{}" || strings.has_suffix(value, "{}") {
+                // Zero-value struct literal: "opt := Cmd_Run_Opt{}" -> extract type name.
+                type_name := strings.trim_right(value, "{}")
+                if len(type_name) > 0 {
+                    append(&result_parts, fmt.tprintf("%s: %s", name, type_name))
+                } else {
+                    fmt.eprintfln("Warning: _strip_defaults cannot infer type for '%s := %s' — using rawptr", name, value)
+                    append(&result_parts, fmt.tprintf("%s: rawptr", name))
+                }
             } else {
-                // Unknown inferred type — cannot produce valid proc pointer type syntax.
-                fmt.eprintfln("Error: _strip_defaults cannot infer type for '%s := %s' — add a case to handle this default", name, value)
-                os.exit(1)
+                // Unknown inferred type — warn but don't crash.
+                fmt.eprintfln("Warning: _strip_defaults cannot infer type for '%s := %s' — using rawptr", name, value)
+                append(&result_parts, fmt.tprintf("%s: rawptr", name))
             }
         } else {
             // Check for "name: Type = value" pattern.
