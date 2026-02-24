@@ -9,7 +9,7 @@ import "core:strings"
 // Action to take during directory walking.
 Walk_Action :: enum {
     Continue,  // Continue into directories.
-    Skip,      // Skip this directory (don't recurse into it).
+    Skip,      // Skip this directory (don't recurse into it). Only meaningful in pre-order mode.
     Stop,      // Stop the entire walk.
 }
 
@@ -105,7 +105,7 @@ _walk_dir_impl :: proc(
             action := callback(entry, opt.user_data)
             switch action {
             case .Stop:     return true, true
-            case .Skip:     continue
+            case .Skip:     // No-op in post-order: children were already visited.
             case .Continue: // Fall through.
             }
         }

@@ -231,7 +231,7 @@ bld.cmd_run(&cmd)
 ### Parallel Execution
 
 ```odin
-procs := bld.procs_create(context.temp_allocator)
+procs := bld.procs_create()
 
 cmd1 := bld.cmd_create(context.temp_allocator)
 bld.cmd_append(&cmd1, "echo", "task 1")
@@ -241,14 +241,15 @@ cmd2 := bld.cmd_create(context.temp_allocator)
 bld.cmd_append(&cmd2, "echo", "task 2")
 bld.cmd_run(&cmd2, {async = &procs})
 
-bld.procs_flush(&procs)  // Wait for all
+bld.procs_flush(&procs)   // Wait for all
+bld.procs_destroy(&procs) // Clean up
 ```
 
 ### Command Pipes
 
 ```odin
 chain: bld.Chain
-bld.chain_begin(&chain)
+if !bld.chain_begin(&chain) do return
 
 cmd1 := bld.cmd_create(context.temp_allocator)
 bld.cmd_append(&cmd1, "cat", "input.txt")
@@ -259,6 +260,7 @@ bld.cmd_append(&cmd2, "grep", "pattern")
 bld.chain_cmd(&chain, &cmd2)
 
 bld.chain_end(&chain)
+bld.chain_destroy(&chain)
 ```
 
 ### Directory Walking
@@ -297,7 +299,7 @@ See `example/` for a complete working example:
 
 - `example/src/main.odin` — a small Odin app with `add` and `greet` procs
 - `example/src/main_test.odin` — tests for the app
-- `example/build.odin` — comprehensive build script that exercises every bld feature (53 tests)
+- `example/build.odin` — comprehensive build script that exercises every bld feature (97 tests)
 
 Run it:
 

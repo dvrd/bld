@@ -245,7 +245,7 @@ Chain_End_Opt :: struct {
 
 Walk_Action :: enum {
     Continue,  // Continue into directories.
-    Skip,      // Skip this directory (don't recurse into it).
+    Skip,      // Skip this directory (don't recurse into it). Only meaningful in pre-order mode.
     Stop,      // Stop the entire walk.
 }
 
