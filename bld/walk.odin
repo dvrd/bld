@@ -14,6 +14,8 @@ Walk_Action :: enum {
 }
 
 // Entry passed to the walk callback.
+// NOTE: entry.path is temp-allocated and valid only for the duration of the callback.
+// Do NOT store it — clone it with strings.clone if you need it to outlive the call.
 Walk_Entry :: struct {
     path:  string,
     type:  File_Type,
@@ -22,6 +24,7 @@ Walk_Entry :: struct {
 
 // Callback for directory walking.
 // Return .Continue to keep going, .Skip to skip a directory, .Stop to halt.
+// entry.path is valid only during this invocation — clone if you need to keep it.
 Walk_Proc :: proc(entry: Walk_Entry, user_data: rawptr) -> Walk_Action
 
 // Walk options.

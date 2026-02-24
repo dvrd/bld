@@ -48,20 +48,20 @@ file_stem :: proc(path: string) -> string {
 }
 
 // Join path components with a forward slash separator.
-path_join :: proc(parts: ..string) -> string {
-    return strings.join(parts, "/", context.temp_allocator)
+path_join :: proc(parts: ..string, allocator := context.temp_allocator) -> string {
+    return strings.join(parts, "/", allocator)
 }
 
 // Exported companion for dynlib — takes slice instead of variadic.
 @(export, link_name="bld_path_join")
-_bld_path_join :: proc(parts: []string) -> string {
-    return strings.join(parts, "/", context.temp_allocator)
+_bld_path_join :: proc(parts: []string, allocator := context.temp_allocator) -> string {
+    return strings.join(parts, "/", allocator)
 }
 
-// Get the current working directory (temp allocated).
+// Get the current working directory.
 @(export, link_name="bld_get_cwd")
-get_cwd :: proc() -> (string, bool) {
-    cwd, err := os.get_working_directory(context.temp_allocator)
+get_cwd :: proc(allocator := context.temp_allocator) -> (string, bool) {
+    cwd, err := os.get_working_directory(allocator)
     if err != nil {
         log_error("Could not get current directory: %v", err)
         return "", false

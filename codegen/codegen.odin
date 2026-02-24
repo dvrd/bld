@@ -162,6 +162,61 @@ main :: proc() {
         }
     }
 
+    // Validate SECTIONS against parsed procs — warn on mismatches.
+    {
+        // Build a set of source files that produced procs.
+        files_with_procs := make(map[string]bool, context.temp_allocator)
+        for ps in proc_sigs {
+            files_with_procs[ps.source_file] = true
+        }
+
+        // Check: source files with procs not listed in SECTIONS.
+        for src_file in files_with_procs {
+            found := false
+            for sec in SECTIONS {
+                if sec.source_file == src_file { found = true; break }
+            }
+            if !found {
+                fmt.eprintfln("Warning: source file '%s' has exported procs but is not in SECTIONS — its procs will be omitted from wrapper output", src_file)
+            }
+        }
+
+        // Check: SECTIONS entries with no procs found.
+        for sec in SECTIONS {
+            if !files_with_procs[sec.source_file] {
+                fmt.eprintfln("Warning: SECTIONS entry '%s' (source_file='%s') has no exported procs", sec.comment, sec.source_file)
+            }
+        }
+    }
+
+    // Validate API_SECTIONS against parsed procs — warn on mismatches.
+    {
+        // Build a set of source files that produced procs.
+        files_with_procs := make(map[string]bool, context.temp_allocator)
+        for ps in proc_sigs {
+            if len(ps.link_name) == 0 do continue
+            files_with_procs[ps.source_file] = true
+        }
+
+        // Check: source files with procs not listed in API_SECTIONS.
+        for src_file in files_with_procs {
+            found := false
+            for sec in API_SECTIONS {
+                if sec.source_file == src_file { found = true; break }
+            }
+            if !found {
+                fmt.eprintfln("Warning: source file '%s' has exported procs but is not in API_SECTIONS — its procs will be omitted from _Bld_API struct", src_file)
+            }
+        }
+
+        // Check: API_SECTIONS entries with no procs found.
+        for sec in API_SECTIONS {
+            if !files_with_procs[sec.source_file] {
+                fmt.eprintfln("Warning: API_SECTIONS entry '%s' (source_file='%s') has no exported procs", sec.comment, sec.source_file)
+            }
+        }
+    }
+
     // Sort type_defs according to TYPE_ORDER.
     slice.sort_by(type_defs[:], proc(a, b: Type_Def) -> bool {
         return _type_order_index(a.name) < _type_order_index(b.name)
@@ -300,6 +355,10 @@ main :: proc() {
     strings.write_string(&sb, "    if !ok {\n")
     strings.write_string(&sb, "        fmt.eprintfln(\"[bld] Could not load library at '%s': %s\", dylib_path, dynlib.last_error())\n")
     strings.write_string(&sb, "        os.exit(1)\n")
+    strings.write_string(&sb, "    }\n")
+    strings.write_string(&sb, "    expected := size_of(_Bld_API) / size_of(rawptr) - 1 // subtract __handle\n")
+    strings.write_string(&sb, "    if count != expected {\n")
+    strings.write_string(&sb, "        fmt.eprintfln(\"[bld] Warning: loaded %d/%d symbols — dylib may be stale, rebuild with: odin build bld -build-mode:dll -out:dist/lib/libbld.dylib\", count, expected)\n")
     strings.write_string(&sb, "    }\n\n")
 
     // Load global variable pointers (fail-fast on missing symbols).
@@ -610,6 +669,7 @@ _is_type_def :: proc(line: string) -> bool {
 
     if strings.contains(line, ":: struct {") || strings.contains(line, ":: struct{") do return true
     if strings.contains(line, ":: enum {") || strings.contains(line, ":: enum{") do return true
+    if strings.contains(line, ":: union {") || strings.contains(line, ":: union{") do return true
     if strings.contains(line, ":: bit_set[") do return true
     // Type alias: "Name :: proc("
     if strings.contains(line, ":: proc(") do return true
@@ -667,11 +727,11 @@ _collect_type_def :: proc(lines: []string, start: int) -> Type_Def {
     }
 
     // Effective max for alignment.
-    // Special case: Build_Config has default_to_panic_allocator (26) as a sole outlier
-    // vs ignore_unused_defineables (25). Align to second-longest so the outlier
-    // just gets 1 space rather than making all other fields 1 space wider.
+    // Generic rule: if the longest field name is exactly 1 char longer than the second-longest,
+    // use the second-longest. This prevents a single outlier field from pushing all other
+    // fields one space wider. Applies to any type, not just Build_Config.
     effective_max := max_field_name_len
-    if name == "Build_Config" && max_field_name_len == second_max_field_name_len + 1 {
+    if max_field_name_len == second_max_field_name_len + 1 {
         effective_max = second_max_field_name_len
     }
 
@@ -1037,32 +1097,61 @@ _expand_shorthand_params :: proc(params: string) -> string {
     return strings.join(result[:], ", ", context.temp_allocator)
 }
 
-// Convert slice params back to variadic: "[]string" -> "..string", "[]any" -> "..any"
+// Convert slice params back to variadic: "[]T" -> "..T" for any type T.
 // Only converts the LAST slice parameter to avoid incorrectly making earlier params variadic.
 @(private = "file")
 _make_variadic_params :: proc(params: string) -> string {
-    // Split into individual params, find the last one that's a slice type, replace only that.
+    // Split into individual params, find the last one whose type starts with "[]".
     parts := _split_params(params)
     if len(parts) == 0 do return params
 
-    // Walk backwards to find the last slice param.
+    // Walk backwards to find the last param whose type portion starts with "[]".
     last_slice := -1
     for i := len(parts) - 1; i >= 0; i -= 1 {
         trimmed := strings.trim_space(parts[i])
-        if strings.contains(trimmed, "[]any") || strings.contains(trimmed, "[]string") {
-            last_slice = i
-            break
+        // Find the colon separating name from type (not part of :=).
+        colon := -1
+        for ci := 0; ci < len(trimmed); ci += 1 {
+            if trimmed[ci] == ':' {
+                if ci + 1 < len(trimmed) && trimmed[ci+1] == '=' do continue
+                colon = ci
+                break
+            }
+        }
+        if colon >= 0 {
+            type_part := strings.trim_space(trimmed[colon+1:])
+            // Strip default value if present.
+            eq := strings.index(type_part, " = ")
+            if eq >= 0 {
+                type_part = strings.trim_space(type_part[:eq])
+            }
+            if strings.has_prefix(type_part, "[]") {
+                last_slice = i
+                break
+            }
         }
     }
 
     if last_slice < 0 do return params // No slice params found.
 
-    // Replace only in the last slice param.
-    p := parts[last_slice]
-    if strings.contains(p, "[]any") {
-        parts[last_slice], _ = strings.replace(p, "[]any", "..any", 1, context.temp_allocator)
-    } else {
-        parts[last_slice], _ = strings.replace(p, "[]string", "..string", 1, context.temp_allocator)
+    // Replace "[]" with ".." in the type portion of the last slice param.
+    p := strings.trim_space(parts[last_slice])
+    colon := -1
+    for ci := 0; ci < len(p); ci += 1 {
+        if p[ci] == ':' {
+            if ci + 1 < len(p) && p[ci+1] == '=' do continue
+            colon = ci
+            break
+        }
+    }
+    if colon >= 0 {
+        name_part := p[:colon+1] // "name:"
+        type_part := strings.trim_space(p[colon+1:])
+        // Replace leading "[]" with "..".
+        if strings.has_prefix(type_part, "[]") {
+            type_part = strings.concatenate({"..", type_part[2:]}, context.temp_allocator)
+        }
+        parts[last_slice] = strings.concatenate({name_part, " ", type_part}, context.temp_allocator)
     }
 
     return strings.join(parts[:], ",", context.temp_allocator)

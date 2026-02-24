@@ -87,7 +87,7 @@ Collection :: struct {
 }
 
 Define :: struct {
-    name:  string,
+    name: string,
     value: string,
 }
 
@@ -224,6 +224,7 @@ Chain :: struct {
     has_pending: bool,
     // Intermediate processes that need to be waited on at chain_end.
     processes:   [dynamic]os.Process,
+    allocator:   mem.Allocator,
 }
 
 Chain_Begin_Opt :: struct {
@@ -249,15 +250,15 @@ Walk_Action :: enum {
 }
 
 Walk_Entry :: struct {
-    path:  string,
-    type:  File_Type,
+    path: string,
+    type: File_Type,
     level: int,
 }
 
 Walk_Proc :: proc(entry: Walk_Entry, user_data: rawptr) -> Walk_Action
 
 Walk_Opt :: struct {
-    user_data:  rawptr,
+    user_data: rawptr,
     post_order: bool,   // Visit children before parents.
 }
 
@@ -275,8 +276,8 @@ _Bld_API :: struct {
     dir_name:  proc(path: string, allocator: mem.Allocator) -> string,
     file_ext:  proc(path: string) -> string,
     file_stem: proc(path: string) -> string,
-    path_join: proc(parts: []string) -> string,
-    get_cwd:   proc() -> (string, bool),
+    path_join: proc(parts: []string, allocator: mem.Allocator) -> string,
+    get_cwd:   proc(allocator: mem.Allocator) -> (string, bool),
     set_cwd:   proc(path: string) -> bool,
 
     // From procs.odin:
@@ -319,9 +320,10 @@ _Bld_API :: struct {
     timer_elapsed: proc(start: time.Tick) -> f64,
 
     // From chain.odin:
-    chain_begin: proc(chain: ^Chain, opt: Chain_Begin_Opt) -> bool,
-    chain_cmd:   proc(chain: ^Chain, cmd: ^Cmd, opt: Chain_Cmd_Opt) -> bool,
-    chain_end:   proc(chain: ^Chain, opt: Chain_End_Opt) -> bool,
+    chain_begin:   proc(chain: ^Chain, opt: Chain_Begin_Opt, allocator: mem.Allocator) -> bool,
+    chain_cmd:     proc(chain: ^Chain, cmd: ^Cmd, opt: Chain_Cmd_Opt) -> bool,
+    chain_end:     proc(chain: ^Chain, opt: Chain_End_Opt) -> bool,
+    chain_destroy: proc(chain: ^Chain),
 
     // From fs.odin:
     mkdir_if_not_exists:        proc(path: string) -> bool,
@@ -372,6 +374,10 @@ _load_bld :: proc() {
         fmt.eprintfln("[bld] Could not load library at '%s': %s", dylib_path, dynlib.last_error())
         os.exit(1)
     }
+    expected := size_of(_Bld_API) / size_of(rawptr) - 1 // subtract __handle
+    if count != expected {
+        fmt.eprintfln("[bld] Warning: loaded %d/%d symbols — dylib may be stale, rebuild with: odin build bld -build-mode:dll -out:dist/lib/libbld.dylib", count, expected)
+    }
 
     // Load global variable pointers.
     ml_ptr, ml_ok := dynlib.symbol_address(_api.__handle, "bld_minimal_log_level")
@@ -403,15 +409,15 @@ _load_bld :: proc() {
 
 // -- Logging (variadic) --
 
-log_info :: proc(format: string, args: ..any) {
+log_info :: proc(format: string,args: ..any) {
     _api.log_info(format, args)
 }
 
-log_warn :: proc(format: string, args: ..any) {
+log_warn :: proc(format: string,args: ..any) {
     _api.log_warn(format, args)
 }
 
-log_error :: proc(format: string, args: ..any) {
+log_error :: proc(format: string,args: ..any) {
     _api.log_error(format, args)
 }
 
@@ -433,12 +439,12 @@ file_stem :: proc(path: string) -> string {
     return _api.file_stem(path)
 }
 
-path_join :: proc(parts: ..string) -> string {
-    return _api.path_join(parts)
+path_join :: proc(parts: ..string, allocator := context.temp_allocator) -> string {
+    return _api.path_join(parts, allocator)
 }
 
-get_cwd :: proc() -> (string, bool) {
-    return _api.get_cwd()
+get_cwd :: proc(allocator := context.temp_allocator) -> (string, bool) {
+    return _api.get_cwd(allocator)
 }
 
 set_cwd :: proc(path: string) -> bool {
@@ -473,7 +479,7 @@ cmd_create :: proc(allocator := context.allocator) -> Cmd {
     return _api.cmd_create(allocator)
 }
 
-cmd_append :: proc(cmd: ^Cmd, args: ..string) {
+cmd_append :: proc(cmd: ^Cmd,args: ..string) {
     _api.cmd_append(cmd, args)
 }
 
@@ -513,7 +519,7 @@ build :: proc(config: Build_Config) -> bool {
     return _api.build(config)
 }
 
-run :: proc(config: Build_Config, args: ..string) -> bool {
+run :: proc(config: Build_Config,args: ..string) -> bool {
     return _api.run(config, args)
 }
 
@@ -543,7 +549,7 @@ needs_rebuild1 :: proc(output_path: string, input_path: string) -> (rebuild: boo
     return _api.needs_rebuild1(output_path, input_path)
 }
 
-go_rebuild_urself :: proc(source_path: string, extra_sources: ..string) {
+go_rebuild_urself :: proc(source_path: string,extra_sources: ..string) {
     _api.go_rebuild_urself(source_path, extra_sources)
 }
 
@@ -563,8 +569,8 @@ timer_elapsed :: proc(start: time.Tick) -> f64 {
 
 // -- Command chains --
 
-chain_begin :: proc(chain: ^Chain, opt: Chain_Begin_Opt = {}) -> bool {
-    return _api.chain_begin(chain, opt)
+chain_begin :: proc(chain: ^Chain, opt: Chain_Begin_Opt = {}, allocator := context.temp_allocator) -> bool {
+    return _api.chain_begin(chain, opt, allocator)
 }
 
 chain_cmd :: proc(chain: ^Chain, cmd: ^Cmd, opt: Chain_Cmd_Opt = {}) -> bool {
@@ -573,6 +579,10 @@ chain_cmd :: proc(chain: ^Chain, cmd: ^Cmd, opt: Chain_Cmd_Opt = {}) -> bool {
 
 chain_end :: proc(chain: ^Chain, opt: Chain_End_Opt = {}) -> bool {
     return _api.chain_end(chain, opt)
+}
+
+chain_destroy :: proc(chain: ^Chain) {
+    _api.chain_destroy(chain)
 }
 
 // -- File system operations --

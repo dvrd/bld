@@ -79,7 +79,7 @@ _procs_append :: proc(procs: ^Procs, tp: Tracked_Process) {
 // We define the platform-specific constant here.
 when ODIN_OS == .Darwin {
     @(private = "file")
-    _SC_NPROCESSORS_ONLN :: posix.SC(503)
+    _SC_NPROCESSORS_ONLN :: posix.SC(58)
 } else when ODIN_OS == .Linux {
     @(private = "file")
     _SC_NPROCESSORS_ONLN :: posix.SC(84)
@@ -94,8 +94,10 @@ nprocs :: proc() -> int {
     when ODIN_OS == .Darwin || ODIN_OS == .Linux || ODIN_OS == .FreeBSD || ODIN_OS == .NetBSD || ODIN_OS == .OpenBSD {
         result := posix.sysconf(_SC_NPROCESSORS_ONLN)
         if result > 0 do return int(result)
+        log_warn("sysconf(_SC_NPROCESSORS_ONLN) failed, defaulting to 4")
         return 4
     } else {
+        log_warn("nprocs: unsupported OS, defaulting to 4")
         return 4
     }
 }

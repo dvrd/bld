@@ -3,6 +3,7 @@ package bld
 // Command chains (pipes).
 // Equivalent to shell: cmd1 | cmd2 | cmd3
 
+import "core:mem"
 import "core:os"
 
 // A command chain representing a pipeline of commands.
@@ -17,6 +18,7 @@ Chain :: struct {
     has_pending: bool,
     // Intermediate processes that need to be waited on at chain_end.
     processes:   [dynamic]os.Process,
+    allocator:   mem.Allocator,
 }
 
 Chain_Begin_Opt :: struct {
@@ -37,11 +39,12 @@ Chain_End_Opt :: struct {
 
 // Begin a command chain.
 @(export, link_name="bld_chain_begin")
-chain_begin :: proc(chain: ^Chain, opt: Chain_Begin_Opt = {}) -> bool {
+chain_begin :: proc(chain: ^Chain, opt: Chain_Begin_Opt = {}, allocator := context.temp_allocator) -> bool {
     chain.pipe_read = nil
     chain.has_pending = false
     chain.err2out = false
-    chain.processes = make([dynamic]os.Process, context.temp_allocator)
+    chain.allocator = allocator
+    chain.processes = make([dynamic]os.Process, allocator)
 
     if len(opt.stdin_path) > 0 {
         f, err := os.open(opt.stdin_path, {.Read})
@@ -232,4 +235,11 @@ chain_end :: proc(chain: ^Chain, opt: Chain_End_Opt = {}) -> bool {
     }
 
     return all_ok
+}
+
+// Destroy a chain, freeing the processes array and pending command.
+@(export, link_name="bld_chain_destroy")
+chain_destroy :: proc(chain: ^Chain) {
+    delete(chain.processes)
+    cmd_destroy(&chain.pending)
 }
