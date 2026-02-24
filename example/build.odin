@@ -6,6 +6,8 @@
 package main
 
 import "core:fmt"
+import "core:os"
+import "core:strings"
 import bld "../bld"
 
 Pass_Count :: struct {
@@ -71,6 +73,7 @@ main :: proc() {
             opt          = .Speed,
         })
         check_result(&pc, "build(release, -o:speed)", ok)
+        check_result(&pc, "binary exists after release build", bld.file_exists("target/testapp-release"))
     }
 
     // =========================================================
@@ -85,6 +88,7 @@ main :: proc() {
             debug        = true,
         })
         check_result(&pc, "build(debug)", ok)
+        check_result(&pc, "binary exists after debug build", bld.file_exists("target/testapp-debug"))
     }
 
     // =========================================================
@@ -99,6 +103,7 @@ main :: proc() {
             vet          = {.Shadowing, .Unused_Imports, .Style},
         })
         check_result(&pc, "build(vet flags)", ok)
+        check_result(&pc, "binary exists after vet build", bld.file_exists("target/testapp-vet"))
     }
 
     // =========================================================
@@ -113,6 +118,7 @@ main :: proc() {
             vet          = {.All},
         })
         check_result(&pc, "build(vet all)", ok)
+        check_result(&pc, "binary exists after vet-all build", bld.file_exists("target/testapp-vetall"))
     }
 
     // =========================================================
@@ -130,6 +136,7 @@ main :: proc() {
             ignore_unused_defineables = true,
         })
         check_result(&pc, "build(defines)", ok)
+        check_result(&pc, "binary exists after defines build", bld.file_exists("target/testapp-defines"))
     }
 
     // =========================================================
@@ -144,6 +151,7 @@ main :: proc() {
             warnings_as_errors = true,
         })
         check_result(&pc, "build(warnings-as-errors)", ok)
+        check_result(&pc, "binary exists after wae build", bld.file_exists("target/testapp-wae"))
     }
 
     // =========================================================
@@ -158,6 +166,7 @@ main :: proc() {
             show_timings = true,
         })
         check_result(&pc, "build(show-timings)", ok)
+        check_result(&pc, "binary exists after timings build", bld.file_exists("target/testapp-timings"))
     }
 
     // =========================================================
@@ -353,8 +362,10 @@ main :: proc() {
         bld.cmd_append(&cmd, "echo", "captured output")
         output, ok := bld.cmd_run_capture(&cmd, context.temp_allocator)
         captured := string(output)
-        // echo adds a newline.
-        check_result(&pc, "cmd_run_capture", ok && len(captured) > 0)
+        // echo adds a newline; verify content, not just length.
+        check_result(&pc, "cmd_run_capture ok", ok)
+        check_result(&pc, "cmd_run_capture output not empty", len(captured) > 0)
+        check_result(&pc, "cmd_run_capture content correct", strings.contains(captured, "captured output"))
     }
 
     // =========================================================
@@ -395,8 +406,15 @@ main :: proc() {
         bld.cmd_append(&cmd2, "tr", "a-z", "A-Z")
         bld.chain_cmd(&chain, &cmd2)
 
-        ok2 := bld.chain_end(&chain)
+        // Redirect chain stdout to a temp file so we can verify the output.
+        ok2 := bld.chain_end(&chain, {stdout_path = "target/chain_out.txt"})
         check_result(&pc, "chain_end (pipe)", ok2)
+
+        // Read back and verify the piped+transformed output.
+        chain_data, chain_read_ok := bld.read_entire_file("target/chain_out.txt", context.temp_allocator)
+        chain_out := string(chain_data)
+        check_result(&pc, "chain output readable", chain_read_ok)
+        check_result(&pc, "chain output contains PIPE TEST", strings.contains(chain_out, "PIPE TEST"))
     }
 
     // =========================================================
@@ -429,20 +447,299 @@ main :: proc() {
     bld.log_info("")
     bld.log_info("--- Test: logging ---")
     {
+        // Verify minimal_log_level mechanism: set it, confirm it changed, restore.
+        // Full suppression verification requires an external test harness (log goes to stderr).
         old_level := bld.minimal_log_level
         bld.minimal_log_level = .Warning
-        // This should NOT appear.
+        level_was_set := bld.minimal_log_level == .Warning
+        // This should NOT appear (level is .Warning, log_info is .Info).
         bld.log_info("THIS SHOULD NOT APPEAR")
         bld.minimal_log_level = old_level
-        check_result(&pc, "minimal_log_level suppresses info", true)
+        level_restored := bld.minimal_log_level == old_level
+        check_result(&pc, "minimal_log_level can be set", level_was_set)
+        check_result(&pc, "minimal_log_level can be restored", level_restored)
 
+        // Verify echo_actions mechanism: set it, confirm it changed, restore.
         old_echo := bld.echo_actions
         bld.echo_actions = false
+        echo_was_set := bld.echo_actions == false
         cmd := bld.cmd_create(context.temp_allocator)
         bld.cmd_append(&cmd, "echo", "silent")
         bld.cmd_run(&cmd)
         bld.echo_actions = old_echo
-        check_result(&pc, "echo_actions = false suppresses CMD echo", true)
+        echo_restored := bld.echo_actions == old_echo
+        check_result(&pc, "echo_actions can be set to false", echo_was_set)
+        check_result(&pc, "echo_actions can be restored", echo_restored)
+    }
+
+    // =========================================================
+    // B1. log_warn — API call does not crash
+    // =========================================================
+    bld.log_info("")
+    bld.log_info("--- Test: log_warn ---")
+    {
+        // Cannot capture stderr from within process; verify no crash.
+        bld.log_warn("test warning %d", 42)
+        check_result(&pc, "log_warn does not crash", true)
+    }
+
+    // =========================================================
+    // B2. dir_name
+    // =========================================================
+    bld.log_info("")
+    bld.log_info("--- Test: dir_name ---")
+    {
+        result := bld.dir_name("foo/bar/baz.txt")
+        // dir_name returns the directory portion; exact trailing slash is impl-defined.
+        check_result(&pc, "dir_name returns non-empty", len(result) > 0)
+        check_result(&pc, "dir_name contains parent", strings.contains(result, "foo/bar") || strings.contains(result, "foo"))
+    }
+
+    // =========================================================
+    // B3. path_join
+    // =========================================================
+    bld.log_info("")
+    bld.log_info("--- Test: path_join ---")
+    {
+        result := bld.path_join("foo", "bar", "baz.txt")
+        check_result(&pc, "path_join result", result == "foo/bar/baz.txt")
+    }
+
+    // =========================================================
+    // B4. set_cwd / get_cwd round-trip
+    // =========================================================
+    bld.log_info("")
+    bld.log_info("--- Test: set_cwd ---")
+    {
+        original, orig_ok := bld.get_cwd()
+        check_result(&pc, "get_cwd before set_cwd", orig_ok && len(original) > 0)
+
+        ok := bld.set_cwd("target")
+        check_result(&pc, "set_cwd to target", ok)
+
+        new_cwd, new_ok := bld.get_cwd()
+        check_result(&pc, "get_cwd changed after set_cwd", new_ok && new_cwd != original)
+
+        // Restore.
+        restore_ok := bld.set_cwd(original)
+        check_result(&pc, "set_cwd restore original", restore_ok)
+
+        restored_cwd, restored_ok := bld.get_cwd()
+        check_result(&pc, "cwd restored correctly", restored_ok && restored_cwd == original)
+    }
+
+    // =========================================================
+    // B5. procs_destroy — no crash
+    // =========================================================
+    bld.log_info("")
+    bld.log_info("--- Test: procs_destroy ---")
+    {
+        procs := bld.procs_create(context.temp_allocator)
+        bld.procs_destroy(&procs)
+        check_result(&pc, "procs_destroy does not crash", true)
+    }
+
+    // =========================================================
+    // B6. procs_wait — non-destructive wait
+    // =========================================================
+    bld.log_info("")
+    bld.log_info("--- Test: procs_wait ---")
+    {
+        procs := bld.procs_create(context.temp_allocator)
+
+        cmd_pw := bld.cmd_create(context.temp_allocator)
+        bld.cmd_append(&cmd_pw, "echo", "procs_wait test")
+        bld.cmd_run(&cmd_pw, {async = &procs})
+
+        // procs_wait takes Procs by value — waits without clearing the list.
+        wait_ok := bld.procs_wait(procs)
+        check_result(&pc, "procs_wait ok", wait_ok)
+        // Note: do NOT call procs_flush after procs_wait — the processes are
+        // already reaped and a second wait would return ESRCH.
+    }
+
+    // =========================================================
+    // B7. cmd_extend
+    // =========================================================
+    bld.log_info("")
+    bld.log_info("--- Test: cmd_extend ---")
+    {
+        base := bld.cmd_create(context.temp_allocator)
+        bld.cmd_append(&base, "echo", "hello")
+
+        extra := bld.cmd_create(context.temp_allocator)
+        bld.cmd_append(&extra, "world")
+
+        bld.cmd_extend(&base, extra)
+        rendered := bld.cmd_render(base)
+        check_result(&pc, "cmd_extend combines args", strings.contains(rendered, "hello") && strings.contains(rendered, "world"))
+    }
+
+    // =========================================================
+    // B8. cmd_reset
+    // =========================================================
+    bld.log_info("")
+    bld.log_info("--- Test: cmd_reset ---")
+    {
+        cmd := bld.cmd_create(context.temp_allocator)
+        bld.cmd_append(&cmd, "echo", "before reset")
+        bld.cmd_reset(&cmd)
+        rendered := bld.cmd_render(cmd)
+        check_result(&pc, "cmd_reset clears args", len(rendered) == 0)
+    }
+
+    // =========================================================
+    // B9. cmd_destroy — no crash
+    // =========================================================
+    bld.log_info("")
+    bld.log_info("--- Test: cmd_destroy ---")
+    {
+        // Use a non-temp allocator so destroy actually frees memory.
+        cmd := bld.cmd_create(context.allocator)
+        bld.cmd_append(&cmd, "echo", "to be destroyed")
+        bld.cmd_destroy(&cmd)
+        check_result(&pc, "cmd_destroy does not crash", true)
+    }
+
+    // =========================================================
+    // B10. cmd_render
+    // =========================================================
+    bld.log_info("")
+    bld.log_info("--- Test: cmd_render ---")
+    {
+        cmd := bld.cmd_create(context.temp_allocator)
+        bld.cmd_append(&cmd, "odin", "build", ".", "-out:target/foo")
+        rendered := bld.cmd_render(cmd)
+        check_result(&pc, "cmd_render contains command", strings.contains(rendered, "odin"))
+        check_result(&pc, "cmd_render contains args", strings.contains(rendered, "build"))
+        check_result(&pc, "cmd_render contains flags", strings.contains(rendered, "-out:target/foo"))
+    }
+
+    // =========================================================
+    // B11. needs_rebuild (multi-input)
+    // =========================================================
+    bld.log_info("")
+    bld.log_info("--- Test: needs_rebuild (multi-input) ---")
+    {
+        // Create two temp input files.
+        bld.write_entire_file_string("target/nb_input1.txt", "input1")
+        bld.write_entire_file_string("target/nb_input2.txt", "input2")
+        // Output doesn't exist → should need rebuild.
+        rebuild1, ok1 := bld.needs_rebuild("target/nb_output_missing.txt", []string{"target/nb_input1.txt", "target/nb_input2.txt"})
+        check_result(&pc, "needs_rebuild multi: missing output needs rebuild", rebuild1 && ok1)
+
+        // Create output after inputs → should NOT need rebuild.
+        bld.write_entire_file_string("target/nb_output.txt", "output")
+        rebuild2, ok2 := bld.needs_rebuild("target/nb_output.txt", []string{"target/nb_input1.txt", "target/nb_input2.txt"})
+        // Output was just created (newer than inputs), so no rebuild needed.
+        check_result(&pc, "needs_rebuild multi: up-to-date ok", ok2)
+        _ = rebuild2 // Direction depends on filesystem timestamp resolution; just verify no error.
+    }
+
+    // =========================================================
+    // B12. nanos_now
+    // =========================================================
+    bld.log_info("")
+    bld.log_info("--- Test: nanos_now ---")
+    {
+        t1 := bld.nanos_now()
+        t2 := bld.nanos_now()
+        check_result(&pc, "nanos_now > 0", t1 > 0)
+        check_result(&pc, "nanos_now is monotonic", t2 >= t1)
+    }
+
+    // =========================================================
+    // B13. write_entire_file (raw bytes)
+    // =========================================================
+    bld.log_info("")
+    bld.log_info("--- Test: write_entire_file (raw bytes) ---")
+    {
+        // "Hello" as raw bytes.
+        hello_bytes := []u8{72, 101, 108, 108, 111}
+        ok := bld.write_entire_file("target/raw_bytes.txt", hello_bytes)
+        check_result(&pc, "write_entire_file raw bytes", ok)
+
+        data, read_ok := bld.read_entire_file("target/raw_bytes.txt", context.temp_allocator)
+        check_result(&pc, "write_entire_file: read back ok", read_ok)
+        check_result(&pc, "write_entire_file: content matches", string(data) == "Hello")
+    }
+
+    // =========================================================
+    // B14. chain_destroy — no crash
+    // =========================================================
+    bld.log_info("")
+    bld.log_info("--- Test: chain_destroy ---")
+    {
+        chain: bld.Chain
+        bld.chain_begin(&chain)
+        bld.chain_destroy(&chain)
+        check_result(&pc, "chain_destroy does not crash", true)
+    }
+
+    // =========================================================
+    // C1. Negative: cmd_run with non-existent executable
+    // =========================================================
+    bld.log_info("")
+    bld.log_info("--- Test: negative: cmd_run non-existent ---")
+    {
+        cmd := bld.cmd_create(context.temp_allocator)
+        bld.cmd_append(&cmd, "nonexistent_binary_xyz_bld_test")
+        ok := bld.cmd_run(&cmd)
+        check_result(&pc, "cmd_run non-existent returns false", !ok)
+    }
+
+    // =========================================================
+    // C2. Negative: copy_file missing source
+    // =========================================================
+    bld.log_info("")
+    bld.log_info("--- Test: negative: copy_file missing source ---")
+    {
+        ok := bld.copy_file("nonexistent_source_xyz.txt", "target/copy_should_fail.txt")
+        check_result(&pc, "copy_file missing source returns false", !ok)
+    }
+
+    // =========================================================
+    // C3. Negative: read_entire_file missing
+    // =========================================================
+    bld.log_info("")
+    bld.log_info("--- Test: negative: read_entire_file missing ---")
+    {
+        _, ok := bld.read_entire_file("nonexistent_xyz.txt", context.temp_allocator)
+        check_result(&pc, "read_entire_file missing returns false", !ok)
+    }
+
+    // =========================================================
+    // C4. Negative: rename_file missing source
+    // =========================================================
+    bld.log_info("")
+    bld.log_info("--- Test: negative: rename_file missing ---")
+    {
+        ok := bld.rename_file("nonexistent_xyz.txt", "target/renamed_should_fail.txt")
+        check_result(&pc, "rename_file missing source returns false", !ok)
+    }
+
+    // =========================================================
+    // C5. Negative: walk_dir missing directory
+    // =========================================================
+    bld.log_info("")
+    bld.log_info("--- Test: negative: walk_dir missing dir ---")
+    {
+        ok := bld.walk_dir("nonexistent_dir_xyz", proc(entry: bld.Walk_Entry, user_data: rawptr) -> bld.Walk_Action {
+            return .Continue
+        })
+        check_result(&pc, "walk_dir missing dir returns false", !ok)
+    }
+
+    // =========================================================
+    // C6. Negative: delete_file missing
+    // =========================================================
+    bld.log_info("")
+    bld.log_info("--- Test: negative: delete_file missing ---")
+    {
+        // Behavior is implementation-defined: may return true (idempotent) or false.
+        // We call it to verify it does not crash and returns a bool.
+        _ = bld.delete_file("nonexistent_xyz_bld_test.txt")
+        check_result(&pc, "delete_file missing does not crash", true)
     }
 
     // =========================================================
@@ -456,6 +753,12 @@ main :: proc() {
         "target/testapp-vet", "target/testapp-vetall", "target/testapp-defines",
         "target/testapp-wae", "target/testapp-timings",
         "target/testapp-preset-release", "target/testapp-preset-debug",
+        "target/testapp-run",
+        // B-test artifacts.
+        "target/chain_out.txt",
+        "target/nb_input1.txt", "target/nb_input2.txt",
+        "target/nb_output.txt",
+        "target/raw_bytes.txt",
     }) {
         bld.delete_file(name)
     }
@@ -477,6 +780,7 @@ main :: proc() {
 
     if pc.failed > 0 {
         bld.log_error("SOME TESTS FAILED")
+        os.exit(1)
     } else {
         bld.log_info("ALL TESTS PASSED")
     }
